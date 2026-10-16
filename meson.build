@@ -1,5 +1,5 @@
 project('syna_00dc_tod', 'c',
-    version: '0.1.0',
+    version: '0.1.2',
     default_options: [
         'c_std=gnu11',
         'warning_level=2',
@@ -147,3 +147,12 @@ test_ssm_logic_bin = executable('test_ssm_logic',
     dependencies: [libfprint_tod_dep, libfprint_public_dep, openssl_dep, gusb_dep, glib_dep, gio_dep, m_dep]
 )
 test('ssm_logic_tests', test_ssm_logic_bin)
+
+# Cache files are tested with synthetic floats and no device access.
+test_baseline_bin = executable('test_baseline',
+    sources: ['tests/test_baseline.c', 'src/syna_tls.c', 'src/syna_oem.c', 'src/syna_mode2.c', 'src/syna_align_frames.c', 'src/syna_matcher.c', 'src/syna_template.c'],
+    include_directories: driver_includes,
+    c_args: ['-D_GNU_SOURCE', '-Wno-deprecated-declarations', '-Wno-missing-field-initializers', '-ffunction-sections', '-fdata-sections'],
+    link_args: ['-Wl,--gc-sections'],
+    dependencies: [libfprint_tod_dep, libfprint_public_dep, openssl_dep, gusb_dep, glib_dep, gio_dep, m_dep])
+test('baseline_cache_tests', test_baseline_bin)

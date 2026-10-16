@@ -8,6 +8,8 @@
 #include <math.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
 
 G_DEFINE_TYPE (FpiDeviceSyna00dc, fpi_device_syna_00dc, FP_TYPE_DEVICE)
 
@@ -227,58 +229,58 @@ get_baseline_cache_path (const char *custom_dir)
 static gboolean
 syna_load_baseline_cache (const char *dir, float *out_baseline)
 {
-    const char *candidates[4] = { NULL, NULL, NULL, NULL };
-    int num_candidates = 0;
-
-    if (dir) {
-        candidates[num_candidates++] = dir;
-    } else {
-        const char *env_dir = getenv ("SYNA_TOD_DATA_DIR");
-        if (env_dir) candidates[num_candidates++] = env_dir;
-        candidates[num_candidates++] = SYNA_DEFAULT_DATA_DIR;
-        candidates[num_candidates++] = "drivers/syna_tod/credentials";
-    }
-
-    const char *filenames[2] = { "baseline_cache.bin", "baseline.bin" };
-    FILE *f = NULL;
-
-    for (int c = 0; c < num_candidates && !f; c++) {
-        for (int fn = 0; fn < 2 && !f; fn++) {
-            char *p = g_build_filename (candidates[c], filenames[fn], NULL);
-            f = fopen (p, "rb");
-            if (f) {
-                g_message ("Found baseline cache at: %s", p);
-            }
-            g_free (p);
+    const char *selected = dir;
+    if (!selected) selected = getenv ("SYNA_TOD_DATA_DIR");
+    if (!selected) selected = SYNA_DEFAULT_DATA_DIR;
+    /* Do not fall back to another directory when the selected cache fails. */
+    const char *names[] = { "baseline_cache.bin", "baseline.bin" };
+    const size_t count = SYNA_OUTPUT_ROWS * SYNA_SAMPLE_BYTES;
+    for (size_t i = 0; i < G_N_ELEMENTS (names); i++) {
+        char *path = g_build_filename (selected, names[i], NULL);
+        int fd = open (path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+        g_free (path);
+        if (fd < 0) {
+            if (errno == ENOENT) continue;
+            return FALSE;
         }
+        struct stat st;
+        if (fstat (fd, &st) != 0 || !S_ISREG (st.st_mode) ||
+            st.st_size != (off_t)(count * sizeof (float))) {
+            close (fd);
+            return FALSE;
+        }
+        FILE *f = fdopen (fd, "rb");
+        if (!f) { close (fd); return FALSE; }
+        float *values = g_new (float, count);
+        gboolean valid = fread (values, sizeof (float), count, f) == count;
+        if (fclose (f) != 0) valid = FALSE;
+        for (size_t j = 0; valid && j < count; j++)
+            if (!isfinite (values[j])) valid = FALSE;
+        if (valid) memcpy (out_baseline, values, count * sizeof (float));
+        g_free (values);
+        return valid;
     }
-
-    if (!f) return FALSE;
-
-    size_t expected = SYNA_OUTPUT_ROWS * SYNA_SAMPLE_BYTES;
-    size_t read_count = fread (out_baseline, sizeof (float), expected, f);
-    fclose (f);
-    return (read_count == expected);
+    return FALSE;
 }
 
 static void
 syna_save_baseline_cache (const char *dir, const float *baseline)
 {
+    const size_t count = SYNA_OUTPUT_ROWS * SYNA_SAMPLE_BYTES;
+    for (size_t i = 0; i < count; i++)
+        if (!isfinite (baseline[i])) return;
     char *path = get_baseline_cache_path (dir);
-    char *tmp_path = g_strdup_printf ("%s.tmp.%d", path, (int)getpid ());
-
-    FILE *f = fopen (tmp_path, "wb");
-    if (f) {
-        int fd = fileno (f);
-        if (fd >= 0) {
-            fchmod (fd, 0600);
-        }
-        size_t expected = SYNA_OUTPUT_ROWS * SYNA_SAMPLE_BYTES;
-        size_t written = fwrite (baseline, sizeof (float), expected, f);
-        fclose (f);
-        if (written == expected) {
-            rename (tmp_path, path);
+    char *tmp_path = g_strdup_printf ("%s.XXXXXX", path);
+    int fd = g_mkstemp_full (tmp_path, O_RDWR | O_CLOEXEC, 0600);
+    if (fd >= 0) {
+        FILE *f = fdopen (fd, "wb");
+        if (f) {
+            gboolean valid = fwrite (baseline, sizeof (float), count, f) == count;
+            if (fflush (f) != 0 || fsync (fd) != 0) valid = FALSE;
+            if (fclose (f) != 0) valid = FALSE;
+            if (!valid || rename (tmp_path, path) != 0) unlink (tmp_path);
         } else {
+            close (fd);
             unlink (tmp_path);
         }
     }
@@ -494,6 +496,11 @@ syna_open_thread (GTask *task, gpointer source_object, gpointer task_data, GCanc
     /* Load OEM blobs and host credentials (or run first-boot pairing if allowed) */
     if (syna_oem_load (NULL, &self->oem) != 0) {
         const char *allow_pair = getenv ("SYNA_ALLOW_AUTO_PAIR");
+        if (allow_pair && strcmp (allow_pair, "1") == 0 && !syna_oem_pairing_allowed (NULL)) {
+            error = g_error_new_literal (G_IO_ERROR, G_IO_ERROR_FAILED,
+                                         "OEM credentials exist or are inaccessible; refusing automatic re-pair");
+            goto fail;
+        }
         if (allow_pair && strcmp (allow_pair, "1") == 0) {
             g_message ("No existing credentials found; running first-boot host pairing (0x4f + 0x50)...");
             char *new_key_pem = NULL;

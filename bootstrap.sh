@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Download a versioned source snapshot, then build as the invoking user.
 set -euo pipefail
-VERSION=v0.1.1
+VERSION=v0.1.2
 REPO=https://github.com/pierspad/synaptics-00dc
 if [[ ${1:-} == --help ]]; then
-    echo 'Usage: bootstrap.sh [--setup] (downloads, builds/tests and installs v0.1.1)'
+    echo 'Usage: bootstrap.sh [--setup] (downloads, builds/tests and installs v0.1.2)'
     exit 0
 fi
 [[ $# -eq 0 || ( $# -eq 1 && "$1" == --setup ) ]] || { echo 'Unknown option' >&2; exit 2; }

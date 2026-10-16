@@ -40,7 +40,18 @@ Removing it means integrating the driver into native libfprint, not deleting a
 package dependency or changing the plugin directory. Do not activate the unused
 SSM backend solely because its unit tests pass.
 
-Specific engineering follow-ups include honoring a custom build directory in
-`setup.sh`, separating credentials/calibration state by physical device, and
+Specific engineering follow-ups include separating credentials/calibration state
+by physical device and
 reviewing legacy Polkit rules separately from installation. The generic installer
 message suggesting setup is for first-time configuration, not a required update step.
+
+## v0.1.2 — offline hardening
+
+Version v0.1.2 adds custom setup build directories, stricter baseline
+file validation and selected-directory lookup, unique private temporary files,
+and refusal to re-pair automatically after existing credential/configuration errors.
+Synthetic regression tests cover these cases; this is not hardware validation.
+Baseline memory caching is still process-global and the default on-disk directory
+is model-wide. Multi-reader isolation has not been implemented. File replacement
+is atomic per file, not an all-or-nothing credential-set transaction; a partial
+set after interrupted setup must be recovered, not automatically paired again.

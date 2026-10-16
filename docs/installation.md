@@ -27,11 +27,15 @@ and remove that old rule explicitly to restore distribution defaults. This scrip
 does not silently delete an administrator's existing configuration.
 
 Guided `setup.sh` uses a 45-second initialization deadline and a 120-second
-enrollment deadline. Failure stops the sequence and restores fprintd's prior active
+enrollment deadline. It uses `build/` in the checkout by default; pass
+`--build-dir DIR` to use another existing build directory (relative paths are
+resolved from the directory where the command is run). The directory must contain
+both `libsyna_00dc_tod.so` and the `test_fprint_open` diagnostic executable.
+Failure stops the sequence and restores fprintd's prior active
 or inactive state, as does normal completion. A timeout
 does not prove successful device cleanup. Do not retry pairing blindly.
 
-The installation command references the v0.1.1 tag (tags can be moved by a
+The installation command references the v0.1.2 tag (tags can be moved by a
 repository administrator). It uses HTTPS but is not a content-pinned or
 signed binary release; builds depend on your local distribution toolchain. No
 universal distro compatibility or freshly paired hardware success is claimed.

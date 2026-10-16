@@ -112,4 +112,5 @@ if [[ -z "$DESTDIR" ]]; then
     if systemctl is-active --quiet fprintd; then systemctl restart fprintd; fi
 fi
 echo "Installed. Backup and restore manifest: $BACKUP"
-echo 'Next: bash setup.sh (guided first pairing/calibration and enrollment).'
+echo 'Existing installation: keep credentials and test verification; no setup needed.'
+printf 'First-time setup only: bash %q --build-dir %q\n' "$ROOT/setup.sh" "$BUILD"

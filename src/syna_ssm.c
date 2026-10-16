@@ -210,9 +210,9 @@ syna_open_ssm_handler (FpiSsm *ssm, FpDevice *dev)
             return;
         }
         const char *allow_pair = getenv ("SYNA_ALLOW_AUTO_PAIR");
-        if (!allow_pair || strcmp (allow_pair, "1") != 0) {
+        if (!allow_pair || strcmp (allow_pair, "1") != 0 || !syna_oem_pairing_allowed (NULL)) {
             fpi_ssm_mark_failed (ssm, fpi_device_error_new_msg (FP_DEVICE_ERROR_DATA_NOT_FOUND,
-                                                                "Missing OEM pairing credentials"));
+                                                                "OEM credentials exist, are inaccessible, or pairing is disabled; refusing automatic re-pair"));
             return;
         }
         uint8_t own_req[453];

@@ -36,6 +36,12 @@ typedef struct {
 int syna_oem_load(const char *data_dir, SynaOemData *oem);
 
 /**
+ * Return true only when all pairing credential paths are absent.
+ * A present, symlinked, or inaccessible path disables automatic pairing.
+ */
+bool syna_oem_pairing_allowed(const char *data_dir);
+
+/**
  * Atomically persist newly paired credentials (host_key.pem, host_cert.bin, server_ecdh_pub.bin)
  * to data_dir (or SYNA_DEFAULT_DATA_DIR if NULL) with 0700 dir / 0600 file permissions.
  */

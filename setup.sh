@@ -2,10 +2,33 @@
 # User-invoked guided hardware step. Never run unattended from an agent terminal.
 set -euo pipefail
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+usage() {
+    cat <<'EOF'
+Usage: bash setup.sh [--build-dir DIR]
+
+Run the guided pairing, calibration and enrollment steps using an existing
+build directory. Relative build directory paths are resolved from the current
+working directory. The default is the checkout's build/ directory.
+EOF
+}
+BUILD_DIR="$ROOT/build"
+while (($#)); do
+    case $1 in
+        --help|-h) usage; exit 0 ;;
+        --build-dir)
+            (($# >= 2)) || { echo 'Missing directory after --build-dir.' >&2; exit 2; }
+            BUILD_DIR=$2
+            shift 2
+            ;;
+        *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+    esac
+done
+if [[ $BUILD_DIR != /* ]]; then BUILD_DIR="$PWD/$BUILD_DIR"; fi
 [[ $EUID -ne 0 ]] || { echo 'Run as your normal desktop user.' >&2; exit 1; }
 [[ -r /dev/tty ]] || { echo 'A local interactive terminal is required.' >&2; exit 1; }
 for tool in timeout fprintd-enroll sudo; do command -v "$tool" >/dev/null || { echo "Missing $tool" >&2; exit 1; }; done
-[[ -x "$ROOT/build/test_fprint_open" ]] || { echo 'Run install.sh --apply first.' >&2; exit 1; }
+[[ -f "$BUILD_DIR/libsyna_00dc_tod.so" ]] || { echo "TOD module missing from $BUILD_DIR; build/install the driver first." >&2; exit 1; }
+[[ -x "$BUILD_DIR/test_fprint_open" ]] || { echo "Diagnostic executable missing from $BUILD_DIR; build the driver first." >&2; exit 1; }
 echo 'Synaptics 06cb:00dc: first pairing/calibration is experimental on new devices.'
 echo 'This may pair the sensor with this Linux installation. Keep password access.'
 echo 'Leave the sensor EMPTY for calibration (maximum 45 seconds).'
@@ -40,8 +63,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 sudo systemctl stop fprintd
 sudo timeout --signal=INT --kill-after=5s 45s env \
-    SYNA_ALLOW_AUTO_PAIR=1 FP_TOD_DRIVERS_DIR="$ROOT/build" \
-    "$ROOT/build/test_fprint_open"
+    SYNA_ALLOW_AUTO_PAIR=1 FP_TOD_DRIVERS_DIR="$BUILD_DIR" \
+    "$BUILD_DIR/test_fprint_open"
 sudo systemctl start fprintd
 echo 'Calibration finished. Follow fprintd prompts to touch/lift your right index finger.'
 timeout --signal=INT --kill-after=5s 120s fprintd-enroll -f right-index-finger

@@ -25,7 +25,7 @@ Run these commands as your normal user:
 sudo apt update &&
 sudo apt install build-essential meson ninja-build pkg-config curl \
   libssl-dev libgusb-dev libusb-1.0-0-dev libfprint-2-tod-dev fprintd &&
-curl -fsSL https://raw.githubusercontent.com/pierspad/synaptics-00dc/v0.1.1/bootstrap.sh \
+curl -fsSL https://raw.githubusercontent.com/pierspad/synaptics-00dc/v0.1.2/bootstrap.sh \
   -o /tmp/synaptics-00dc-install.sh &&
 bash /tmp/synaptics-00dc-install.sh --setup
 ```
@@ -56,7 +56,7 @@ Check TOD development files, then install the driver:
 
 ```sh
 pkg-config --exists libfprint-2-tod-1 &&
-curl -fsSL https://raw.githubusercontent.com/pierspad/synaptics-00dc/v0.1.1/bootstrap.sh \
+curl -fsSL https://raw.githubusercontent.com/pierspad/synaptics-00dc/v0.1.2/bootstrap.sh \
   -o /tmp/synaptics-00dc-install.sh &&
 bash /tmp/synaptics-00dc-install.sh --setup
 ```
