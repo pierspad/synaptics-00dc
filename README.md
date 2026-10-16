@@ -25,7 +25,7 @@ On Arch/CachyOS, install a compatible `libfprint-tod` package first, plus `base-
 Then, as your normal user:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/pierspad/synaptics-00dc/v0.1.0/bootstrap.sh -o /tmp/synaptics-00dc-install.sh && bash /tmp/synaptics-00dc-install.sh --setup
+curl -fsSL https://raw.githubusercontent.com/pierspad/synaptics-00dc/v0.1.1/bootstrap.sh -o /tmp/synaptics-00dc-install.sh && bash /tmp/synaptics-00dc-install.sh --setup
 ```
 
 Downloads the tagged source, builds and runs offline C tests, then asks sudo to install the module. Guided setup asks before pairing, calibrates with the sensor empty, and starts enrollment. **You still need to touch the sensor.** Keep password access; PAM/login settings are not changed. On a new sensor, setup may fail: stop and report the error rather than repeatedly re-pairing. Review the scripts before executing downloaded code.

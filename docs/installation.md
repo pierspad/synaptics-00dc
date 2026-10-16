@@ -31,7 +31,7 @@ enrollment deadline. Failure stops the sequence and restores fprintd's prior act
 or inactive state, as does normal completion. A timeout
 does not prove successful device cleanup. Do not retry pairing blindly.
 
-The installation command references the v0.1.0 tag (tags can be moved by a
+The installation command references the v0.1.1 tag (tags can be moved by a
 repository administrator). It uses HTTPS but is not a content-pinned or
 signed binary release; builds depend on your local distribution toolchain. No
 universal distro compatibility or freshly paired hardware success is claimed.

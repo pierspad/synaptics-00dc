@@ -43,6 +43,8 @@ class InstallerTests(unittest.TestCase):
             build.mkdir()
             (build / 'libsyna_00dc_tod.so').write_bytes(b'offline test module')
             dest = base / 'dest'
+            private_parent = dest / 'var/lib/fprint'
+            private_parent.mkdir(parents=True, mode=0o700)
             result = self.run_installer('--apply', '--destdir', str(dest),
                                         '--build-dir', str(build), '--no-build')
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -50,6 +52,7 @@ class InstallerTests(unittest.TestCase):
             self.assertFalse(list(dest.rglob('*polkit*')))
             self.assertFalse(list(dest.rglob('*.pem')))
             self.assertTrue((dest / 'var/lib/fprint/syna_00dc').is_dir())
+            self.assertEqual(private_parent.stat().st_mode & 0o777, 0o700)
 
     def test_symlinked_destination_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

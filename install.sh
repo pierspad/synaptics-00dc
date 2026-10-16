@@ -76,7 +76,8 @@ if [[ -z "$DESTDIR" && "$EUID" != 0 ]]; then
     exec sudo bash "$ROOT/install.sh" "${args[@]}"
 fi
 umask 077
-install -d -m 0755 "$DESTDIR/var/lib/fprint"
+# fprintd owns this parent. Preserve its existing privacy permissions.
+mkdir -p -- "$DESTDIR/var/lib/fprint"
 BACKUP=$(mktemp -d "$DESTDIR/var/lib/fprint/syna_00dc-backup.XXXXXXXX")
 for target in "$MODULE" "$RULE" "$STATE"; do
     if [[ -e "$target" ]]; then
