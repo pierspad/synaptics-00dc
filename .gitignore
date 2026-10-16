@@ -1,0 +1,10 @@
+/build*/
+/credentials/
+__pycache__/
+*.pyc
+*.pem
+*.bin
+*.raw
+*.pgm
+*.so
+*.log

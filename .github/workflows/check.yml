@@ -1,0 +1,11 @@
+name: Checks
+on: [push, pull_request]
+jobs:
+  offline:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y meson ninja-build pkg-config libssl-dev libgusb-dev libusb-1.0-0-dev libfprint-2-tod-dev
+      - run: meson setup build && ninja -C build && meson test -C build --print-errorlogs
+      - run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - run: bash -n install.sh bootstrap.sh setup.sh
