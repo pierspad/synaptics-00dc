@@ -382,6 +382,7 @@ syna_open_ssm_handler (FpiSsm *ssm, FpDevice *dev)
         fpi_ssm_mark_completed (ssm);
         break;
 
+    case SYNA_OPEN_NUM_STATES:
     default:
         fpi_ssm_mark_completed (ssm);
         break;
@@ -886,6 +887,7 @@ syna_capture_ssm_handler (FpiSsm *ssm, FpDevice *dev)
         break;
     }
 
+    case SYNA_CAP_NUM_STATES:
     default:
         fpi_ssm_mark_completed (ssm);
         break;
@@ -1035,6 +1037,7 @@ syna_close_ssm_handler (FpiSsm *ssm, FpDevice *dev)
         fpi_ssm_mark_completed (ssm);
         break;
 
+    case SYNA_CLOSE_NUM_STATES:
     default:
         fpi_ssm_mark_completed (ssm);
         break;
