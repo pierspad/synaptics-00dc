@@ -33,6 +33,8 @@ fpi_device_syna_00dc_init (FpiDeviceSyna00dc *self)
     self->capture_pipeline_ready = FALSE;
     self->baseline = NULL;
     self->has_baseline = FALSE;
+    self->has_cached_baseline = FALSE;
+    memset (self->cached_baseline, 0, sizeof (self->cached_baseline));
     self->initial_contact_present = FALSE;
     self->enrolled_templates = g_ptr_array_new_with_free_func (g_free);
 }
@@ -213,9 +215,6 @@ syna_prepare_capture_pipeline (FpiDeviceSyna00dc *self, GCancellable *cancellabl
     return init_ok;
 }
 
-static float s_cached_baseline[SYNA_OUTPUT_ROWS * SYNA_SAMPLE_BYTES];
-static gboolean s_has_cached_baseline = FALSE;
-static GMutex s_baseline_mutex;
 
 static char *
 get_baseline_cache_path (const char *custom_dir)
@@ -315,14 +314,13 @@ syna_calibrate_baseline (FpiDeviceSyna00dc *self, GCancellable *cancellable, GEr
         self->baseline = g_malloc0 (SYNA_OUTPUT_ROWS * SYNA_SAMPLE_BYTES * sizeof (float));
     }
 
-    g_mutex_lock (&s_baseline_mutex);
-    if (!s_has_cached_baseline) {
-        s_has_cached_baseline = syna_load_baseline_cache (NULL, s_cached_baseline);
+    if (!self->has_cached_baseline) {
+        self->has_cached_baseline = syna_load_baseline_cache (NULL, self->cached_baseline);
     }
 
     uint8_t frame_buf[SYNA_FRAME_BYTES];
     size_t total_pixels = SYNA_OUTPUT_ROWS * SYNA_SAMPLE_BYTES;
-    int target_frames = s_has_cached_baseline ? 4 : 10;
+    int target_frames = self->has_cached_baseline ? 4 : 10;
     int base_count = 0;
     float *accumulated = g_malloc0 (total_pixels * sizeof (float));
     float rms_sum = 0.0f;
@@ -337,8 +335,8 @@ syna_calibrate_baseline (FpiDeviceSyna00dc *self, GCancellable *cancellable, GEr
             float dec[SYNA_OUTPUT_ROWS * SYNA_SAMPLE_BYTES];
             syna_decode_frame_unclipped (frame_buf, dec);
 
-            if (s_has_cached_baseline) {
-                float r = calc_rms (dec, s_cached_baseline, total_pixels);
+            if (self->has_cached_baseline) {
+                float r = calc_rms (dec, self->cached_baseline, total_pixels);
                 rms_sum += r;
             }
 
@@ -375,29 +373,26 @@ syna_calibrate_baseline (FpiDeviceSyna00dc *self, GCancellable *cancellable, GEr
 
     if (error && *error) {
         g_free (accumulated);
-        g_mutex_unlock (&s_baseline_mutex);
         return FALSE;
     }
 
-    if (base_count < (s_has_cached_baseline ? 2 : 5)) {
+    if (base_count < (self->has_cached_baseline ? 2 : 5)) {
         g_free (accumulated);
-        g_mutex_unlock (&s_baseline_mutex);
         g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Failed to read baseline frames from sensor");
         return FALSE;
     }
 
     self->initial_contact_present = FALSE;
 
-    if (s_has_cached_baseline) {
+    if (self->has_cached_baseline) {
         float avg_rms = rms_sum / (float)base_count;
         if (avg_rms > 18.0f) {
             /* User finger is already touching sensor! Retain clean cached baseline. */
             g_message ("Open: finger contact present at startup (RMS=%.1f > 18.0). Retaining clean cached baseline.", avg_rms);
-            memcpy (self->baseline, s_cached_baseline, total_pixels * sizeof (float));
+            memcpy (self->baseline, self->cached_baseline, total_pixels * sizeof (float));
             self->has_baseline = TRUE;
             self->initial_contact_present = TRUE;
             g_free (accumulated);
-            g_mutex_unlock (&s_baseline_mutex);
             return TRUE;
         }
 
@@ -405,11 +400,10 @@ syna_calibrate_baseline (FpiDeviceSyna00dc *self, GCancellable *cancellable, GEr
         for (size_t i = 0; i < total_pixels; i++) {
             self->baseline[i] = accumulated[i] / (float)base_count;
         }
-        memcpy (s_cached_baseline, self->baseline, total_pixels * sizeof (float));
+        memcpy (self->cached_baseline, self->baseline, total_pixels * sizeof (float));
         syna_save_baseline_cache (NULL, self->baseline);
         self->has_baseline = TRUE;
         g_free (accumulated);
-        g_mutex_unlock (&s_baseline_mutex);
         return TRUE;
     }
 
@@ -419,7 +413,6 @@ syna_calibrate_baseline (FpiDeviceSyna00dc *self, GCancellable *cancellable, GEr
     avg_val /= (float)(base_count * total_pixels);
     if (avg_val < 50.0f || avg_val > 200.0f) {
         g_free (accumulated);
-        g_mutex_unlock (&s_baseline_mutex);
         g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
                              "Sensor calibration returned abnormal signal levels");
         return FALSE;
@@ -428,12 +421,11 @@ syna_calibrate_baseline (FpiDeviceSyna00dc *self, GCancellable *cancellable, GEr
     for (size_t i = 0; i < total_pixels; i++) {
         self->baseline[i] = accumulated[i] / (float)base_count;
     }
-    memcpy (s_cached_baseline, self->baseline, total_pixels * sizeof (float));
-    s_has_cached_baseline = TRUE;
+    memcpy (self->cached_baseline, self->baseline, total_pixels * sizeof (float));
+    self->has_cached_baseline = TRUE;
     syna_save_baseline_cache (NULL, self->baseline);
     self->has_baseline = TRUE;
     g_free (accumulated);
-    g_mutex_unlock (&s_baseline_mutex);
     return TRUE;
 }
 
@@ -592,20 +584,17 @@ syna_open_thread (GTask *task, gpointer source_object, gpointer task_data, GCanc
 
     self->has_baseline = FALSE;
     /* 4. Load persistent baseline cache from disk, or calibrate if missing */
-    g_mutex_lock (&s_baseline_mutex);
-    if (!s_has_cached_baseline) {
-        s_has_cached_baseline = syna_load_baseline_cache (NULL, s_cached_baseline);
+    if (!self->has_cached_baseline) {
+        self->has_cached_baseline = syna_load_baseline_cache (NULL, self->cached_baseline);
     }
-    if (s_has_cached_baseline) {
+    if (self->has_cached_baseline) {
         if (!self->baseline) {
             self->baseline = g_malloc0 (SYNA_OUTPUT_ROWS * SYNA_SAMPLE_BYTES * sizeof (float));
         }
-        memcpy (self->baseline, s_cached_baseline, SYNA_OUTPUT_ROWS * SYNA_SAMPLE_BYTES * sizeof (float));
+        memcpy (self->baseline, self->cached_baseline, SYNA_OUTPUT_ROWS * SYNA_SAMPLE_BYTES * sizeof (float));
         self->has_baseline = TRUE;
-        g_mutex_unlock (&s_baseline_mutex);
         g_message ("Open: loaded persistent baseline from cache (instant zero-wait startup)");
     } else {
-        g_mutex_unlock (&s_baseline_mutex);
         /* First-time calibration without cache */
         if (!syna_calibrate_baseline (self, cancellable, &error)) {
             goto fail;

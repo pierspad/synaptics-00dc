@@ -17,6 +17,8 @@ G_DECLARE_FINAL_TYPE (FpiDeviceSyna00dc, fpi_device_syna_00dc, FPI, DEVICE_SYNA_
 
 GType fpi_tod_shared_driver_get_type (void);
 
+typedef struct _FpiDeviceSyna00dc FpiDeviceSynaTod;
+
 struct _FpiDeviceSyna00dc
 {
     FpDevice parent;
@@ -34,6 +36,10 @@ struct _FpiDeviceSyna00dc
     float *baseline;
     gboolean has_baseline;
     gboolean initial_contact_present;
+
+    /* Per-device cached empty sensor baseline */
+    float cached_baseline[SYNA_IMG_WIDTH * SYNA_IMG_HEIGHT];
+    gboolean has_cached_baseline;
 
     /* Enrolled templates stored locally */
     GPtrArray *enrolled_templates;
