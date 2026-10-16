@@ -912,3 +912,146 @@ syna_ssm_capture_new (FpiDeviceSyna00dc           *self,
     fpi_ssm_set_data (ssm, ctx, syna_capture_ssm_data_free);
     return ssm;
 }
+
+/* ============================================================================
+ * 3. CLOSE_SSM: Non-blocking Teardown (0x1a Cleanup + TLS Alert + Release USB)
+ * ============================================================================ */
+
+gboolean
+syna_ssm_close_cancellable_valid (GCancellable *cancellable)
+{
+    /* Teardown operations must be uncancellable (cancellable == NULL) */
+    return cancellable == NULL;
+}
+
+typedef struct {
+    FpiDeviceSyna00dc *self;
+    SynaSsmUsbRunner runner;
+    gpointer user_data;
+    uint8_t rx_buf[512];
+    size_t rx_len;
+} SynaCloseSsmData;
+
+static void
+syna_close_ssm_data_free (gpointer data)
+{
+    SynaCloseSsmData *ctx = data;
+    g_free (ctx);
+}
+
+static void
+syna_ssm_close_bulk_rx_cb (FpiUsbTransfer *transfer, FpDevice *device, gpointer user_data, GError *error)
+{
+    (void)device;
+    (void)user_data;
+    if (error) {
+        g_clear_error (&error);
+    }
+    fpi_ssm_next_state (transfer->ssm);
+}
+
+static void
+syna_ssm_close_bulk_rx (FpiSsm *ssm, FpDevice *dev, size_t max_len, guint timeout_ms)
+{
+    FpiUsbTransfer *t = fpi_usb_transfer_new (dev);
+    t->ssm = ssm;
+    fpi_usb_transfer_fill_bulk (t, SYNA_EP_CMD_IN, max_len);
+    fpi_usb_transfer_submit (t, timeout_ms, NULL, syna_ssm_close_bulk_rx_cb, NULL);
+}
+
+static void
+syna_ssm_close_bulk_tx (FpiSsm *ssm, FpDevice *dev, const uint8_t *buf, size_t len, guint timeout_ms)
+{
+    FpiUsbTransfer *t = fpi_usb_transfer_new (dev);
+    t->ssm = ssm;
+    t->short_is_error = TRUE;
+    fpi_usb_transfer_fill_bulk (t, SYNA_EP_CMD_OUT, len);
+    memcpy (t->buffer, buf, len);
+    fpi_usb_transfer_submit (t, timeout_ms, NULL, fpi_ssm_usb_transfer_cb, NULL);
+}
+
+static void
+syna_close_ssm_handler (FpiSsm *ssm, FpDevice *dev)
+{
+    SynaCloseSsmData *ctx = fpi_ssm_get_data (ssm);
+    FpiDeviceSyna00dc *self = ctx ? ctx->self : (FpiDeviceSyna00dc *)dev;
+    int step = fpi_ssm_get_cur_state (ssm);
+
+    if (ctx && ctx->runner) {
+        ctx->runner (ssm, dev, ctx->user_data);
+        return;
+    }
+
+    switch ((SynaCloseStep)step) {
+    case SYNA_CLOSE_STEP_CLEANUP_TX: {
+        if (!self || !self->tls.finished_verified) {
+            fpi_ssm_jump_to_state (ssm, SYNA_CLOSE_STEP_RELEASE_USB);
+            return;
+        }
+        uint8_t cmd = SYNA_CMD_CLEANUP;
+        uint8_t enc[256];
+        size_t enc_len = 0;
+        if (syna_tls_encrypt_app_data (&self->tls, &cmd, 1, enc, &enc_len) != 0) {
+            fpi_ssm_jump_to_state (ssm, SYNA_CLOSE_STEP_TLS_ALERT_TX);
+            return;
+        }
+        syna_ssm_close_bulk_tx (ssm, dev, enc, enc_len, 1000);
+        break;
+    }
+
+    case SYNA_CLOSE_STEP_CLEANUP_RX:
+        syna_ssm_close_bulk_rx (ssm, dev, sizeof (ctx->rx_buf), 1000);
+        break;
+
+    case SYNA_CLOSE_STEP_TLS_ALERT_TX: {
+        if (!self || !self->tls.finished_verified) {
+            fpi_ssm_jump_to_state (ssm, SYNA_CLOSE_STEP_RELEASE_USB);
+            return;
+        }
+        uint8_t alert[128];
+        size_t alert_len = 0;
+        if (syna_tls_build_close_notify (&self->tls, alert, &alert_len) != 0) {
+            fpi_ssm_jump_to_state (ssm, SYNA_CLOSE_STEP_RELEASE_USB);
+            return;
+        }
+        syna_ssm_close_bulk_tx (ssm, dev, alert, alert_len, 1000);
+        break;
+    }
+
+    case SYNA_CLOSE_STEP_TLS_ALERT_RX:
+        syna_ssm_close_bulk_rx (ssm, dev, sizeof (ctx->rx_buf), 1000);
+        break;
+
+    case SYNA_CLOSE_STEP_RELEASE_USB:
+        if (self) {
+            syna_tls_free (&self->tls);
+            syna_oem_free (&self->oem);
+            if (self->usb_device) {
+                g_usb_device_release_interface (self->usb_device, 0, 0, NULL);
+            }
+            self->is_open = FALSE;
+            self->capture_pipeline_ready = FALSE;
+        }
+        fpi_ssm_mark_completed (ssm);
+        break;
+
+    default:
+        fpi_ssm_mark_completed (ssm);
+        break;
+    }
+}
+
+FpiSsm *
+syna_ssm_close_new (FpDevice *dev, SynaSsmUsbRunner runner, gpointer user_data)
+{
+    FpiSsm *ssm = fpi_ssm_new_full (dev, syna_close_ssm_handler,
+                                    SYNA_CLOSE_NUM_STATES,
+                                    SYNA_CLOSE_STEP_RELEASE_USB,
+                                    "syna_close_ssm");
+    SynaCloseSsmData *ctx = g_new0 (SynaCloseSsmData, 1);
+    ctx->self = (FpiDeviceSyna00dc *)dev;
+    ctx->runner = runner;
+    ctx->user_data = user_data;
+    fpi_ssm_set_data (ssm, ctx, syna_close_ssm_data_free);
+    return ssm;
+}

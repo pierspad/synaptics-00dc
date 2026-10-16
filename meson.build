@@ -146,6 +146,15 @@ test_ssm_logic_bin = executable('test_ssm_logic',
 )
 test('ssm_logic_tests', test_ssm_logic_bin)
 
+test_ssm_bin = executable('test_ssm',
+    sources: ['tests/test_ssm.c', 'src/syna_ssm.c', 'src/syna_tls.c', 'src/syna_oem.c', 'src/syna_mode2.c', 'src/syna_align_frames.c', 'src/syna_matcher.c', 'src/syna_template.c'],
+    include_directories: driver_includes,
+    c_args: ['-D_GNU_SOURCE', '-Wno-missing-field-initializers', '-ffunction-sections', '-fdata-sections'],
+    link_args: ['-Wl,--gc-sections'],
+    dependencies: [libfprint_tod_dep, libfprint_public_dep, openssl_dep, gusb_dep, glib_dep, gio_dep, m_dep]
+)
+test('ssm_tests', test_ssm_bin)
+
 # Cache files are tested with synthetic floats and no device access.
 test_baseline_bin = executable('test_baseline',
     sources: ['tests/test_baseline.c', 'src/syna_tls.c', 'src/syna_oem.c', 'src/syna_mode2.c', 'src/syna_align_frames.c', 'src/syna_matcher.c', 'src/syna_template.c'],
