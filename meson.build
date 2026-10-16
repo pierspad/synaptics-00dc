@@ -35,7 +35,6 @@ tod_driver = shared_module('syna_00dc_tod',
     sources: tod_sources,
     c_args: [
         '-D_GNU_SOURCE',
-        '-Wno-deprecated-declarations',
         '-Wno-missing-field-initializers'
     ],
     include_directories: driver_includes,
@@ -71,7 +70,6 @@ test('matcher_tests', test_matcher_bin)
 test_tls_bin = executable('test_tls',
     sources: ['tests/test_tls.c', 'src/syna_tls.c'],
     include_directories: driver_includes,
-    c_args: ['-Wno-deprecated-declarations'],
     dependencies: [openssl_dep]
 )
 test('tls_tests', test_tls_bin)
@@ -152,7 +150,7 @@ test('ssm_logic_tests', test_ssm_logic_bin)
 test_baseline_bin = executable('test_baseline',
     sources: ['tests/test_baseline.c', 'src/syna_tls.c', 'src/syna_oem.c', 'src/syna_mode2.c', 'src/syna_align_frames.c', 'src/syna_matcher.c', 'src/syna_template.c'],
     include_directories: driver_includes,
-    c_args: ['-D_GNU_SOURCE', '-Wno-deprecated-declarations', '-Wno-missing-field-initializers', '-ffunction-sections', '-fdata-sections'],
+    c_args: ['-D_GNU_SOURCE', '-Wno-missing-field-initializers', '-ffunction-sections', '-fdata-sections'],
     link_args: ['-Wl,--gc-sections'],
     dependencies: [libfprint_tod_dep, libfprint_public_dep, openssl_dep, gusb_dep, glib_dep, gio_dep, m_dep])
 test('baseline_cache_tests', test_baseline_bin)

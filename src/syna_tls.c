@@ -4,8 +4,12 @@
 #include <stdlib.h>
 #include <openssl/rand.h>
 #include <openssl/pem.h>
-#include <openssl/hmac.h>
+#include <openssl/evp.h>
+#include <openssl/core_names.h>
+#include <openssl/param_build.h>
+#include <openssl/params.h>
 #include <openssl/ec.h>
+#include <openssl/bn.h>
 
 static void put_u16_be(uint8_t *p, uint16_t v)
 {
@@ -30,6 +34,35 @@ static uint32_t get_u24_be(const uint8_t *p)
     return (uint32_t)((p[0] << 16) | (p[1] << 8) | p[2]);
 }
 
+static int syna_hmac_sha256(const uint8_t *key, size_t key_len,
+                            const uint8_t *data1, size_t data1_len,
+                            const uint8_t *data2, size_t data2_len,
+                            uint8_t *out, size_t *out_len)
+{
+    EVP_MAC *mac = EVP_MAC_fetch(NULL, "HMAC", NULL);
+    if (!mac) return -1;
+    EVP_MAC_CTX *ctx = EVP_MAC_CTX_new(mac);
+    if (!ctx) {
+        EVP_MAC_free(mac);
+        return -1;
+    }
+    OSSL_PARAM params[2];
+    params[0] = OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, (char *)"SHA256", 0);
+    params[1] = OSSL_PARAM_construct_end();
+
+    int ok = 0;
+    if (EVP_MAC_init(ctx, key, key_len, params) > 0 &&
+        EVP_MAC_update(ctx, data1, data1_len) > 0 &&
+        (!data2 || EVP_MAC_update(ctx, data2, data2_len) > 0) &&
+        EVP_MAC_final(ctx, out, out_len, 32) > 0) {
+        ok = 1;
+    }
+
+    EVP_MAC_CTX_free(ctx);
+    EVP_MAC_free(mac);
+    return ok ? 0 : -1;
+}
+
 int syna_tls_prf(const uint8_t *secret, size_t secret_len,
                  const char *label,
                  const uint8_t *seed, size_t seed_len,
@@ -44,8 +77,11 @@ int syna_tls_prf(const uint8_t *secret, size_t secret_len,
     memcpy(full_seed + label_len, seed, seed_len);
 
     uint8_t a[SHA256_DIGEST_LENGTH];
-    unsigned int a_len = 0;
-    HMAC(EVP_sha256(), secret, secret_len, full_seed, full_seed_len, a, &a_len);
+    size_t a_len = 0;
+    if (!EVP_Q_mac(NULL, "HMAC", NULL, "SHA256", NULL, secret, secret_len, full_seed, full_seed_len, a, sizeof(a), &a_len)) {
+        free(full_seed);
+        return -2;
+    }
 
     size_t generated = 0;
     while (generated < out_len) {
@@ -60,8 +96,12 @@ int syna_tls_prf(const uint8_t *secret, size_t secret_len,
         memcpy(chunk_in + sizeof(a), full_seed, full_seed_len);
 
         uint8_t chunk_out[SHA256_DIGEST_LENGTH];
-        unsigned int chunk_out_len = 0;
-        HMAC(EVP_sha256(), secret, secret_len, chunk_in, chunk_in_len, chunk_out, &chunk_out_len);
+        size_t chunk_out_len = 0;
+        if (!EVP_Q_mac(NULL, "HMAC", NULL, "SHA256", NULL, secret, secret_len, chunk_in, chunk_in_len, chunk_out, sizeof(chunk_out), &chunk_out_len)) {
+            free(chunk_in);
+            free(full_seed);
+            return -2;
+        }
         free(chunk_in);
 
         size_t to_copy = (out_len - generated < chunk_out_len) ? (out_len - generated) : chunk_out_len;
@@ -69,7 +109,10 @@ int syna_tls_prf(const uint8_t *secret, size_t secret_len,
         generated += to_copy;
 
         /* A(i+1) = HMAC(secret, A(i)) */
-        HMAC(EVP_sha256(), secret, secret_len, a, sizeof(a), a, &a_len);
+        if (!EVP_Q_mac(NULL, "HMAC", NULL, "SHA256", NULL, secret, secret_len, a, sizeof(a), a, sizeof(a), &a_len)) {
+            free(full_seed);
+            return -2;
+        }
     }
 
     free(full_seed);
@@ -243,28 +286,45 @@ int syna_tls_build_flight2(SynaTlsContext *ctx, uint8_t *out, size_t *out_len)
     if (!ctx || !out || !out_len) return -1;
 
     /* Generate ephemeral session key P-256 */
-    EVP_PKEY_CTX *kctx = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, NULL);
-    if (!kctx) return -2;
-    EVP_PKEY_keygen_init(kctx);
-    EVP_PKEY_CTX_set_ec_paramgen_curve_nid(kctx, NID_X9_62_prime256v1);
-    EVP_PKEY_keygen(kctx, &ctx->session_key);
-    EVP_PKEY_CTX_free(kctx);
-    if (!ctx->session_key) return -3;
+    ctx->session_key = EVP_PKEY_Q_keygen(NULL, NULL, "EC", "prime256v1");
+    if (!ctx->session_key) return -2;
 
     /* Derive ECDH pre-master secret using server ECDH pubkey */
-    EC_KEY *peer_ec = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
-    const uint8_t *p = ctx->server_ecdh_pub;
-    o2i_ECPublicKey(&peer_ec, &p, ctx->server_ecdh_pub_len);
-    EVP_PKEY *peer_pkey = EVP_PKEY_new();
-    EVP_PKEY_set1_EC_KEY(peer_pkey, peer_ec);
-    EC_KEY_free(peer_ec);
+    OSSL_PARAM_BLD *bld = OSSL_PARAM_BLD_new();
+    if (!bld) return -3;
+    OSSL_PARAM_BLD_push_utf8_string(bld, OSSL_PKEY_PARAM_GROUP_NAME, "prime256v1", 0);
+    OSSL_PARAM_BLD_push_octet_string(bld, OSSL_PKEY_PARAM_PUB_KEY, ctx->server_ecdh_pub, ctx->server_ecdh_pub_len);
+    OSSL_PARAM *params = OSSL_PARAM_BLD_to_param(bld);
+    OSSL_PARAM_BLD_free(bld);
+    if (!params) return -3;
+
+    EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new_from_name(NULL, "EC", NULL);
+    if (!pctx) {
+        OSSL_PARAM_free(params);
+        return -3;
+    }
+    EVP_PKEY_fromdata_init(pctx);
+    EVP_PKEY *peer_pkey = NULL;
+    int rc = EVP_PKEY_fromdata(pctx, &peer_pkey, EVP_PKEY_PUBLIC_KEY, params);
+    EVP_PKEY_CTX_free(pctx);
+    OSSL_PARAM_free(params);
+    if (rc <= 0 || !peer_pkey) return -3;
 
     EVP_PKEY_CTX *dctx = EVP_PKEY_CTX_new(ctx->session_key, NULL);
+    if (!dctx) {
+        EVP_PKEY_free(peer_pkey);
+        return -3;
+    }
     EVP_PKEY_derive_init(dctx);
     EVP_PKEY_derive_set_peer(dctx, peer_pkey);
     size_t secret_len = 0;
     EVP_PKEY_derive(dctx, NULL, &secret_len);
     uint8_t *pre_master = malloc(secret_len);
+    if (!pre_master) {
+        EVP_PKEY_CTX_free(dctx);
+        EVP_PKEY_free(peer_pkey);
+        return -3;
+    }
     EVP_PKEY_derive(dctx, pre_master, &secret_len);
     EVP_PKEY_CTX_free(dctx);
     EVP_PKEY_free(peer_pkey);
@@ -317,12 +377,12 @@ int syna_tls_build_flight2(SynaTlsContext *ctx, uint8_t *out, size_t *out_len)
     size_t kex_len_pos = pos;
     pos += 3;
     /* Point 65 bytes (0x04 || X || Y) */
-    const EC_KEY *my_ec = EVP_PKEY_get0_EC_KEY(ctx->session_key);
-    const EC_POINT *point = EC_KEY_get0_public_key(my_ec);
-    const EC_GROUP *group = EC_KEY_get0_group(my_ec);
-    uint8_t point_buf[65];
-    EC_POINT_point2oct(group, point, POINT_CONVERSION_UNCOMPRESSED, point_buf, 65, NULL);
-    memcpy(buf + pos, point_buf, 65); pos += 65;
+    size_t point_len = 65;
+    if (!EVP_PKEY_get_octet_string_param(ctx->session_key, OSSL_PKEY_PARAM_PUB_KEY, buf + pos, 65, &point_len) ||
+        point_len != 65) {
+        return -7;
+    }
+    pos += 65;
     put_u24_be(buf + kex_len_pos, 65);
 
     /* Update transcript before CertificateVerify */
@@ -339,14 +399,23 @@ int syna_tls_build_flight2(SynaTlsContext *ctx, uint8_t *out, size_t *out_len)
     buf[pos++] = 0x0f;
     size_t cv_len_pos = pos;
     pos += 3;
-    unsigned int sig_len = 0;
-    const EC_KEY *host_ec = EVP_PKEY_get0_EC_KEY(ctx->host_priv_key);
-    ECDSA_sign(0, transcript_hash, thash_len, buf + pos, &sig_len, (EC_KEY *)host_ec);
-    put_u24_be(buf + cv_len_pos, sig_len);
+    EVP_PKEY_CTX *sctx = EVP_PKEY_CTX_new(ctx->host_priv_key, NULL);
+    if (!sctx) return -8;
+    if (EVP_PKEY_sign_init(sctx) <= 0) {
+        EVP_PKEY_CTX_free(sctx);
+        return -8;
+    }
+    size_t sig_len_sz = 145;
+    if (EVP_PKEY_sign(sctx, buf + pos, &sig_len_sz, transcript_hash, thash_len) <= 0) {
+        EVP_PKEY_CTX_free(sctx);
+        return -8;
+    }
+    EVP_PKEY_CTX_free(sctx);
+    put_u24_be(buf + cv_len_pos, (uint32_t)sig_len_sz);
 
     /* Add CertificateVerify to transcript */
-    EVP_DigestUpdate(ctx->transcript_ctx, buf + (cv_len_pos - 1), 4 + sig_len);
-    pos += sig_len;
+    EVP_DigestUpdate(ctx->transcript_ctx, buf + (cv_len_pos - 1), 4 + sig_len_sz);
+    pos += sig_len_sz;
 
     put_u16_be(buf + hs_rec_len_pos, (uint16_t)(pos - hs_content_start));
 
@@ -431,14 +500,10 @@ int syna_tls_encrypt_record(SynaTlsContext *ctx,
     /* TLS MAC: HMAC(type || 0x0303 || len || plain) */
     uint8_t hdr[5] = { record_type, 0x03, 0x03, (uint8_t)(plain_len >> 8), (uint8_t)plain_len };
     uint8_t mac[SHA256_DIGEST_LENGTH];
-    unsigned int mac_len = 0;
+    size_t mac_len = 0;
 
-    HMAC_CTX *hctx = HMAC_CTX_new();
-    HMAC_Init_ex(hctx, ctx->client_mac_key, 32, EVP_sha256(), NULL);
-    HMAC_Update(hctx, hdr, 5);
-    HMAC_Update(hctx, plain, plain_len);
-    HMAC_Final(hctx, mac, &mac_len);
-    HMAC_CTX_free(hctx);
+    if (syna_hmac_sha256(ctx->client_mac_key, 32, hdr, 5, plain, plain_len, mac, &mac_len) != 0)
+        return -2;
 
     size_t payload_len = plain_len + 32;
     uint8_t *payload = malloc(payload_len + 16);
@@ -542,14 +607,12 @@ static int syna_tls_decrypt_record(SynaTlsContext *ctx, uint8_t expected_type,
     /* Verify HMAC */
     uint8_t hdr[5] = { type, 0x03, 0x03, (uint8_t)(content_len >> 8), (uint8_t)content_len };
     uint8_t expected_mac[SHA256_DIGEST_LENGTH];
-    unsigned int emac_len = 0;
+    size_t emac_len = 0;
 
-    HMAC_CTX *hctx = HMAC_CTX_new();
-    HMAC_Init_ex(hctx, ctx->server_mac_key, 32, EVP_sha256(), NULL);
-    HMAC_Update(hctx, hdr, 5);
-    HMAC_Update(hctx, plain, content_len);
-    HMAC_Final(hctx, expected_mac, &emac_len);
-    HMAC_CTX_free(hctx);
+    if (syna_hmac_sha256(ctx->server_mac_key, 32, hdr, 5, plain, content_len, expected_mac, &emac_len) != 0) {
+        free(plain);
+        return -7;
+    }
 
     if (CRYPTO_memcmp(received_mac, expected_mac, 32) != 0) {
         free(plain);
@@ -610,29 +673,57 @@ static EVP_PKEY *derive_vendor_signer(void)
         scalar_be[i] = scalar_le[31 - i];
     }
 
-    EC_KEY *eckey = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
-    if (!eckey) return NULL;
-
     BIGNUM *priv_bn = BN_bin2bn(scalar_be, 32, NULL);
-    const EC_GROUP *group = EC_KEY_get0_group(eckey);
-    EC_POINT *pub_pt = EC_POINT_new(group);
+    if (!priv_bn) return NULL;
 
-    if (!priv_bn || !pub_pt ||
-        !EC_POINT_mul(group, pub_pt, priv_bn, NULL, NULL, NULL) ||
-        !EC_KEY_set_private_key(eckey, priv_bn) ||
-        !EC_KEY_set_public_key(eckey, pub_pt)) {
+    EC_GROUP *group = EC_GROUP_new_by_curve_name(NID_X9_62_prime256v1);
+    if (!group) {
         BN_free(priv_bn);
-        EC_POINT_free(pub_pt);
-        EC_KEY_free(eckey);
         return NULL;
     }
 
-    BN_free(priv_bn);
-    EC_POINT_free(pub_pt);
+    EC_POINT *pub_pt = EC_POINT_new(group);
+    if (!pub_pt || !EC_POINT_mul(group, pub_pt, priv_bn, NULL, NULL, NULL)) {
+        BN_free(priv_bn);
+        EC_POINT_free(pub_pt);
+        EC_GROUP_free(group);
+        return NULL;
+    }
 
-    EVP_PKEY *pkey = EVP_PKEY_new();
-    if (!pkey || !EVP_PKEY_assign_EC_KEY(pkey, eckey)) {
-        EC_KEY_free(eckey);
+    uint8_t pub_oct[65];
+    size_t pub_len = EC_POINT_point2oct(group, pub_pt, POINT_CONVERSION_UNCOMPRESSED, pub_oct, sizeof(pub_oct), NULL);
+    EC_POINT_free(pub_pt);
+    EC_GROUP_free(group);
+    if (pub_len != 65) {
+        BN_free(priv_bn);
+        return NULL;
+    }
+
+    OSSL_PARAM_BLD *bld = OSSL_PARAM_BLD_new();
+    if (!bld) {
+        BN_free(priv_bn);
+        return NULL;
+    }
+    OSSL_PARAM_BLD_push_utf8_string(bld, OSSL_PKEY_PARAM_GROUP_NAME, "prime256v1", 0);
+    OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_PRIV_KEY, priv_bn);
+    OSSL_PARAM_BLD_push_octet_string(bld, OSSL_PKEY_PARAM_PUB_KEY, pub_oct, pub_len);
+    OSSL_PARAM *params = OSSL_PARAM_BLD_to_param(bld);
+    OSSL_PARAM_BLD_free(bld);
+    BN_free(priv_bn);
+    if (!params) return NULL;
+
+    EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new_from_name(NULL, "EC", NULL);
+    if (!pctx) {
+        OSSL_PARAM_free(params);
+        return NULL;
+    }
+    EVP_PKEY_fromdata_init(pctx);
+    EVP_PKEY *pkey = NULL;
+    int rc = EVP_PKEY_fromdata(pctx, &pkey, EVP_PKEY_KEYPAIR, params);
+    EVP_PKEY_CTX_free(pctx);
+    OSSL_PARAM_free(params);
+
+    if (rc <= 0) {
         EVP_PKEY_free(pkey);
         return NULL;
     }
@@ -643,7 +734,7 @@ static int extract_pubkey_xy_le(EVP_PKEY *pkey, uint8_t x_le[32], uint8_t y_le[3
 {
     uint8_t pub_uncomp[65];
     size_t pub_len = sizeof(pub_uncomp);
-    if (!EVP_PKEY_get_octet_string_param(pkey, "pub", pub_uncomp, sizeof(pub_uncomp), &pub_len) ||
+    if (!EVP_PKEY_get_octet_string_param(pkey, OSSL_PKEY_PARAM_PUB_KEY, pub_uncomp, sizeof(pub_uncomp), &pub_len) ||
         pub_len != 65 || pub_uncomp[0] != 0x04) {
         return -1;
     }
@@ -660,16 +751,8 @@ int syna_pairing_generate_request(char **out_key_pem, uint8_t *out_packet, size_
     *out_key_pem = NULL;
     *out_packet_len = 0;
 
-    EVP_PKEY *host_key = NULL;
-    EVP_PKEY_CTX *kctx = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, NULL);
-    if (!kctx) return -2;
-    if (EVP_PKEY_keygen_init(kctx) <= 0 ||
-        EVP_PKEY_CTX_set_ec_paramgen_curve_nid(kctx, NID_X9_62_prime256v1) <= 0 ||
-        EVP_PKEY_keygen(kctx, &host_key) <= 0) {
-        EVP_PKEY_CTX_free(kctx);
-        return -3;
-    }
-    EVP_PKEY_CTX_free(kctx);
+    EVP_PKEY *host_key = EVP_PKEY_Q_keygen(NULL, NULL, "EC", "prime256v1");
+    if (!host_key) return -2;
 
     /* Export PKCS#8 PEM private key */
     BIO *bio = BIO_new(BIO_s_mem());
