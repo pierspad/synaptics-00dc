@@ -24,3 +24,23 @@ Default offline burst/score fixtures are synthetic. Private historical fixtures
 can be selected explicitly using SYNA_TEST_CAPTURE7 and SYNA_TEST_CAPTURE8;
 they use fixed offsets from the original REA-FS trials, not arbitrary captures.
 An explicitly missing input is an error, never a silent synthetic fallback.
+
+## Release gates
+
+| Milestone | Evidence required | Current state |
+|---|---|---|
+| Another installation | Exact hardware/software revisions and redacted report | External tester wanted |
+| Fresh pairing | Device-local credentials and baseline, no maintainer exports | Not validated on a fresh external reader |
+| Recovery | Cancel/reopen, unplug and suspend/resume logs | New-build hardware checks pending |
+| Recognition quality | Held-out genuine/impostor attempts and fixed thresholds | Population reliability not established |
+| Native upstream driver | Hardware-tested async implementation and maintainer review | Local compile prototype only |
+
+Keep TOD for the current experimental distribution while validating these gates.
+Removing it means integrating the driver into native libfprint, not deleting a
+package dependency or changing the plugin directory. Do not activate the unused
+SSM backend solely because its unit tests pass.
+
+Specific engineering follow-ups include honoring a custom build directory in
+`setup.sh`, separating credentials/calibration state by physical device, and
+reviewing legacy Polkit rules separately from installation. The generic installer
+message suggesting setup is for first-time configuration, not a required update step.

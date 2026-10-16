@@ -1,4 +1,4 @@
-# Synaptics 00dc
+# Synaptics 00dc (USB 06cb:00dc)
 
 [![Checks](https://github.com/pierspad/synaptics-00dc/actions/workflows/check.yml/badge.svg)](https://github.com/pierspad/synaptics-00dc/actions/workflows/check.yml)
 [![License: LGPL-2.1](https://img.shields.io/badge/License-LGPL--2.1-blue.svg)](LICENSE)
@@ -80,6 +80,32 @@ a local checkout; do not rerun first-time setup just to update the driver.
 Downloads the tagged source, builds and runs offline C tests, then asks sudo to install the module. Guided setup asks before pairing, calibrates with the sensor empty, and starts enrollment. **You still need to touch the sensor.** Keep password access; PAM/login settings are not changed. On a new sensor, setup may fail: stop and report the error rather than repeatedly re-pairing. Review the scripts before executing downloaded code.
 
 Prefer a local checkout? Run `bash install.sh` to preview, `bash install.sh --apply` to install, then `bash setup.sh`. Existing credentials are preserved; optional `--credentials PRIVATE_DIR` imports your own credentials. [Install details and rollback](docs/installation.md).
+
+## Testing and reverse engineering
+
+Want to help? Follow the [tester guide](docs/testing.md) and submit an installation
+or hardware report, including failures. Keep biometric data and pairing keys private.
+LLM-assisted fixes should include a focused diff and tests, not bypass device checks.
+
+For investigation or agent-guided hardware experiments, use the REA-FS workflow:
+
+```sh
+git clone --recurse-submodules https://github.com/pierspad/REA-FS.git
+cd REA-FS
+```
+
+Read its `AGENTS.md` and `docs/getting-started.md` first. Recursive cloning includes
+the pinned example driver; an existing clone can use
+`git submodule update --init --recursive`. Ordinary driver installation does not
+require REA-FS, its GUI, or its submodules.
+
+## Why TOD?
+
+TOD (Touch OEM Drivers) is a libfprint variant with a loadable-driver interface.
+This project uses it to ship a separate module; TOD does not make this driver
+proprietary. The normal upstream libfprint cannot load this module as-is.
+A native upstream port could remove the TOD dependency, but the current native
+prototype is compile-tested only. See [remaining work](docs/status.md).
 
 ## Development
 
