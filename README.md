@@ -14,19 +14,68 @@ Native Linux fingerprint driver for **Synaptics USB `06cb:00dc`**, using libfpri
 
 Requires Linux, a C compiler, Meson, Ninja, pkg-config, OpenSSL 3, GUsb, libusb, **libfprint TOD development headers**, and fprintd. Ordinary upstream libfprint alone is insufficient.
 
-Ubuntu 24.04/26.04 prerequisites:
+### <img src="https://cdn.simpleicons.org/ubuntu/E95420" alt="Ubuntu" width="22" height="22"> Ubuntu 24.04 LTS
+
+The Ubuntu 24.04 CI builds and runs offline tests; this is not a hardware certification.
+Enable **Universe** if your installation does not provide
+[`libfprint-2-tod-dev`](https://packages.ubuntu.com/noble/libfprint-2-tod-dev).
+Run these commands as your normal user:
 
 ```sh
-sudo apt install build-essential meson ninja-build pkg-config curl libssl-dev libgusb-dev libusb-1.0-0-dev libfprint-2-tod-dev fprintd
+sudo apt update &&
+sudo apt install build-essential meson ninja-build pkg-config curl \
+  libssl-dev libgusb-dev libusb-1.0-0-dev libfprint-2-tod-dev fprintd &&
+curl -fsSL https://raw.githubusercontent.com/pierspad/synaptics-00dc/v0.1.1/bootstrap.sh \
+  -o /tmp/synaptics-00dc-install.sh &&
+bash /tmp/synaptics-00dc-install.sh --setup
 ```
 
-On Arch/CachyOS, install a compatible `libfprint-tod` package first, plus `base-devel meson ninja pkgconf openssl libgusb libusb fprintd curl`. The installer does not replace the system libfprint package or run an AUR helper automatically.
+### <img src="https://cdn.simpleicons.org/archlinux/1793D1" alt="Arch Linux" width="22" height="22"> Arch Linux / CachyOS
 
-Then, as your normal user:
+Install the dependencies with a full system upgrade:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/pierspad/synaptics-00dc/v0.1.1/bootstrap.sh -o /tmp/synaptics-00dc-install.sh && bash /tmp/synaptics-00dc-install.sh --setup
+sudo pacman -Syu --needed base-devel git meson ninja pkgconf curl \
+  openssl libgusb libusb fprintd
 ```
+
+Then install **one** TOD provider. If you already use `yay`:
+
+```sh
+yay -S --needed libfprint-tod
+```
+
+[`libfprint-tod`](https://aur.archlinux.org/packages/libfprint-tod) is an
+**AUR community package** and replaces/conflicts with ordinary `libfprint`.
+Review the package build and replacement prompt. `libfprint-tod-git` is an
+alternative, not an additional requirement. Without an AUR helper, follow the
+[manual AUR build instructions](https://wiki.archlinux.org/title/Arch_User_Repository#Installing_and_upgrading_packages).
+On CachyOS, retain an existing compatible TOD installation; do not install a second provider.
+
+Check TOD development files, then install the driver:
+
+```sh
+pkg-config --exists libfprint-2-tod-1 &&
+curl -fsSL https://raw.githubusercontent.com/pierspad/synaptics-00dc/v0.1.1/bootstrap.sh \
+  -o /tmp/synaptics-00dc-install.sh &&
+bash /tmp/synaptics-00dc-install.sh --setup
+```
+
+If the `pkg-config` check fails, stop and fix the TOD package first. The driver
+installer does not install an AUR helper or replace libfprint automatically.
+Local hardware development used CachyOS; other installations still need validation.
+
+### Other distributions
+
+A matching TOD library **and development headers** are required. These instructions
+do not establish support for Debian, Fedora, openSUSE, or other Ubuntu releases;
+ordinary `libfprint` packages are not interchangeable with TOD. Check
+`pkg-config --exists libfprint-2-tod-1` before attempting a local build.
+
+### What setup does
+
+For an existing working installation, update with `bash install.sh --apply` from
+a local checkout; do not rerun first-time setup just to update the driver.
 
 Downloads the tagged source, builds and runs offline C tests, then asks sudo to install the module. Guided setup asks before pairing, calibrates with the sensor empty, and starts enrollment. **You still need to touch the sensor.** Keep password access; PAM/login settings are not changed. On a new sensor, setup may fail: stop and report the error rather than repeatedly re-pairing. Review the scripts before executing downloaded code.
 
