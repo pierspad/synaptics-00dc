@@ -5,6 +5,7 @@
 #include "syna_proto.h"
 #include "syna_template.h"
 #include "syna_timing.h"
+#include "syna_ssm.h"
 #include <math.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -624,9 +625,44 @@ on_open_completed (GObject *source_object, GAsyncResult *res, gpointer user_data
     fpi_device_open_complete (device, error);
 }
 
+static gboolean
+syna_use_async_ssm (void)
+{
+    return g_strcmp0 (g_getenv ("SYNA_USE_SSM"), "1") == 0;
+}
+
+static void
+syna_open_ssm_done_cb (FpiSsm *ssm, FpDevice *device, GError *error)
+{
+    (void)ssm;
+    FpiDeviceSyna00dc *self = FPI_DEVICE_SYNA_00DC (device);
+    if (!error) {
+        self->is_open = TRUE;
+    }
+    fpi_device_open_complete (device, error);
+}
+
 static void
 syna_open (FpDevice *device)
 {
+    if (syna_use_async_ssm ()) {
+        FpiDeviceSyna00dc *self = FPI_DEVICE_SYNA_00DC (device);
+        if (!self->has_cached_baseline) {
+            self->has_cached_baseline = syna_load_baseline_cache (NULL, self->cached_baseline);
+        }
+        if (self->has_cached_baseline) {
+            if (!self->baseline) {
+                self->baseline = g_malloc0 (SYNA_OUTPUT_ROWS * SYNA_SAMPLE_BYTES * sizeof (float));
+            }
+            memcpy (self->baseline, self->cached_baseline, SYNA_OUTPUT_ROWS * SYNA_SAMPLE_BYTES * sizeof (float));
+            self->has_baseline = TRUE;
+            g_message ("Open (SSM): loaded persistent baseline from cache");
+        }
+        FpiSsm *ssm = syna_ssm_open_new (self);
+        fpi_ssm_start (ssm, syna_open_ssm_done_cb);
+        return;
+    }
+
     GTask *task = g_task_new (device, fpi_device_get_cancellable (device),
                               on_open_completed, NULL);
     g_task_run_in_thread (task, syna_open_thread);
@@ -671,8 +707,21 @@ on_close_completed (GObject *source_object, GAsyncResult *res, gpointer user_dat
 }
 
 static void
+syna_close_ssm_done_cb (FpiSsm *ssm, FpDevice *device, GError *error)
+{
+    (void)ssm;
+    fpi_device_close_complete (device, error);
+}
+
+static void
 syna_close (FpDevice *device)
 {
+    if (syna_use_async_ssm ()) {
+        FpiSsm *ssm = syna_ssm_close_new (device, NULL, NULL);
+        fpi_ssm_start (ssm, syna_close_ssm_done_cb);
+        return;
+    }
+
     GTask *task = g_task_new (device, fpi_device_get_cancellable (device),
                               on_close_completed, NULL);
     g_task_run_in_thread (task, syna_close_thread);
@@ -998,16 +1047,85 @@ syna_enroll (FpDevice *device)
     g_object_unref (task);
 }
 
+/* Multi-finger IDENTIFY / single-finger VERIFY gallery entry */
+typedef struct {
+    FpPrint *print;
+    GPtrArray *samples;
+} SynaIdentifyEntry;
+
+static void
+syna_identify_entry_free (gpointer data)
+{
+    SynaIdentifyEntry *entry = data;
+    if (!entry) return;
+    if (entry->print) g_object_unref (entry->print);
+    if (entry->samples) g_ptr_array_unref (entry->samples);
+    g_free (entry);
+}
+
+static int
+syna_match_probe_against_gallery (const float *live_sample,
+                                  GPtrArray *entries,
+                                  FpPrint **out_best_print,
+                                  SynaMatchResult *out_best_res)
+{
+    if (out_best_print) *out_best_print = NULL;
+    if (out_best_res) *out_best_res = (SynaMatchResult){ .score = -1.0f };
+
+    if (!live_sample || !entries || entries->len == 0) {
+        return -1;
+    }
+
+    SynaMatcherContext *matcher_ctx = syna_matcher_context_new ();
+    if (matcher_ctx) {
+        syna_matcher_set_probe (matcher_ctx, live_sample);
+    }
+
+    SynaMatchResult best_res = { .score = -1.0f };
+    FpPrint *best_print = NULL;
+
+    for (guint f = 0; f < entries->len; f++) {
+        SynaIdentifyEntry *entry = entries->pdata[f];
+        if (!entry || !entry->samples) continue;
+        for (guint i = 0; i < entry->samples->len; i++) {
+            SynaMatchResult candidate;
+            int rc;
+            if (matcher_ctx) {
+                rc = syna_matcher_match_template (matcher_ctx, entry->samples->pdata[i], 0.45f, &candidate);
+            } else {
+                rc = syna_match_images (entry->samples->pdata[i], live_sample, 0.45f, &candidate);
+            }
+            if (rc != 0) continue;
+            if (candidate.score > best_res.score) {
+                best_res = candidate;
+                best_print = entry->print;
+            }
+            if (candidate.score >= 0.72f) {
+                g_message ("Synaptics match: early match exit on entry %u template %u (score: %.3f)",
+                           f, i, candidate.score);
+                goto match_done;
+            }
+        }
+    }
+
+match_done:
+    if (matcher_ctx) syna_matcher_context_free (matcher_ctx);
+
+    if (out_best_print) *out_best_print = best_print;
+    if (out_best_res) *out_best_res = best_res;
+
+    return 0;
+}
+
 /* Background thread for VERIFY */
 static void
 syna_verify_thread (GTask *task, gpointer source_object, gpointer task_data, GCancellable *cancellable)
 {
-    (void)task_data;
     FpiDeviceSyna00dc *self = FPI_DEVICE_SYNA_00DC (source_object);
+    GPtrArray *entries = task_data;
     GError *error = NULL;
 
-    GPtrArray *samples = task_data;
-    if (!samples) {
+    if (!entries || entries->len == 0) {
         g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
                                  "Invalid or unsupported enrolled template; enroll again");
         return;
@@ -1019,35 +1137,15 @@ syna_verify_thread (GTask *task, gpointer source_object, gpointer task_data, GCa
         return;
     }
 
-    SynaMatcherContext *matcher_ctx = syna_matcher_context_new ();
-    if (matcher_ctx) {
-        syna_matcher_set_probe (matcher_ctx, live_sample);
-    }
-
-    SynaMatchResult match_res = { .score = -1.0f };
-    for (guint i = 0; i < samples->len; i++) {
-        SynaMatchResult candidate;
-        int rc;
-        if (matcher_ctx) {
-            rc = syna_matcher_match_template (matcher_ctx, samples->pdata[i], 0.45f, &candidate);
-        } else {
-            rc = syna_match_images (samples->pdata[i], live_sample, 0.45f, &candidate);
-        }
-        if (rc != 0) {
-            if (matcher_ctx) syna_matcher_context_free (matcher_ctx);
-            g_free (live_sample);
-            g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED, "Matcher failed");
-            return;
-        }
-        if (candidate.score > match_res.score) match_res = candidate;
-        if (candidate.score >= 0.70f) {
-            g_message ("Synaptics verify: early match exit on template %u (score: %.3f >= 0.70)",
-                       i, candidate.score);
-            break;
-        }
-    }
-    if (matcher_ctx) syna_matcher_context_free (matcher_ctx);
+    SynaMatchResult match_res;
+    FpPrint *best_print = NULL;
+    int rc = syna_match_probe_against_gallery (live_sample, entries, &best_print, &match_res);
     g_free (live_sample);
+
+    if (rc != 0) {
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED, "Matcher failed");
+        return;
+    }
 
     g_message ("Synaptics verify score: %.3f (threshold: %.2f, rotation: %.1f deg, overlap: %.1f%%)",
                match_res.score, (float)SYNA_MATCH_THRESHOLD, match_res.angle, match_res.overlap * 100.0f);
@@ -1083,28 +1181,22 @@ syna_verify (FpDevice *device)
     FpPrint *print = NULL;
     GVariant *data = NULL;
     fpi_device_get_verify_data (device, &print);
-    g_object_get (print, "fpi-data", &data, NULL);
-    GPtrArray *samples = syna_template_decode (data);
+    if (print) {
+        g_object_get (print, "fpi-data", &data, NULL);
+    }
+    GPtrArray *samples = data ? syna_template_decode (data) : NULL;
     if (data) g_variant_unref (data);
-    g_task_set_task_data (task, samples, samples ? (GDestroyNotify)g_ptr_array_unref : NULL);
+
+    GPtrArray *entries = g_ptr_array_new_with_free_func (syna_identify_entry_free);
+    if (samples) {
+        SynaIdentifyEntry *entry = g_new0 (SynaIdentifyEntry, 1);
+        entry->print = print ? g_object_ref (print) : NULL;
+        entry->samples = samples;
+        g_ptr_array_add (entries, entry);
+    }
+    g_task_set_task_data (task, entries, (GDestroyNotify)g_ptr_array_unref);
     g_task_run_in_thread (task, syna_verify_thread);
     g_object_unref (task);
-}
-
-/* Multi-finger IDENTIFY (1-to-N across all enrolled fingers) */
-typedef struct {
-    FpPrint *print;
-    GPtrArray *samples;
-} SynaIdentifyEntry;
-
-static void
-syna_identify_entry_free (gpointer data)
-{
-    SynaIdentifyEntry *entry = data;
-    if (!entry) return;
-    if (entry->print) g_object_unref (entry->print);
-    if (entry->samples) g_ptr_array_unref (entry->samples);
-    g_free (entry);
 }
 
 static void
@@ -1126,39 +1218,9 @@ syna_identify_thread (GTask *task, gpointer source_object, gpointer task_data, G
         return;
     }
 
-    SynaMatcherContext *matcher_ctx = syna_matcher_context_new ();
-    if (matcher_ctx) {
-        syna_matcher_set_probe (matcher_ctx, live_sample);
-    }
-
-    SynaMatchResult best_res = { .score = -1.0f };
+    SynaMatchResult best_res;
     FpPrint *best_print = NULL;
-
-    for (guint f = 0; f < entries->len; f++) {
-        SynaIdentifyEntry *entry = entries->pdata[f];
-        for (guint i = 0; i < entry->samples->len; i++) {
-            SynaMatchResult candidate;
-            int rc;
-            if (matcher_ctx) {
-                rc = syna_matcher_match_template (matcher_ctx, entry->samples->pdata[i], 0.45f, &candidate);
-            } else {
-                rc = syna_match_images (entry->samples->pdata[i], live_sample, 0.45f, &candidate);
-            }
-            if (rc != 0) continue;
-            if (candidate.score > best_res.score) {
-                best_res = candidate;
-                best_print = entry->print;
-            }
-            if (candidate.score >= 0.72f) {
-                g_message ("Synaptics identify: early match exit on finger %u template %u (score: %.3f)",
-                           f, i, candidate.score);
-                goto identify_done;
-            }
-        }
-    }
-
-identify_done:
-    if (matcher_ctx) syna_matcher_context_free (matcher_ctx);
+    syna_match_probe_against_gallery (live_sample, entries, &best_print, &best_res);
     g_free (live_sample);
 
     g_message ("Synaptics identify best score: %.3f (threshold: %.2f, rotation: %.1f deg, overlap: %.1f%%)",
@@ -1242,7 +1304,9 @@ fpi_device_syna_00dc_class_init (FpiDeviceSyna00dcClass *klass)
     dev_class->open = syna_open;
     dev_class->close = syna_close;
     dev_class->enroll = syna_enroll;
-    dev_class->verify = syna_verify;
+    if (g_strcmp0 (dev_class->id, "syna_00dc_tod") == 0) {
+        dev_class->verify = syna_verify;
+    }
     dev_class->identify = syna_identify;
     dev_class->cancel = syna_cancel;
 
