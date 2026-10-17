@@ -22,7 +22,7 @@ Enable **Universe** if [`libfprint-2-tod-dev`](https://packages.ubuntu.com/noble
 sudo apt update &&
 sudo apt install build-essential meson ninja-build pkg-config curl \
   libssl-dev libgusb-dev libusb-1.0-0-dev libfprint-2-tod-dev fprintd &&
-curl -fsSL https://raw.githubusercontent.com/pierspad/synaptics-00dc/v0.1.2/bootstrap.sh \
+curl -fsSL https://raw.githubusercontent.com/pierspad/synaptics-00dc/v0.2.0/bootstrap.sh \
   -o /tmp/synaptics-00dc-install.sh &&
 bash /tmp/synaptics-00dc-install.sh --setup
 ```
@@ -46,7 +46,7 @@ Then build and install the driver:
 
 ```sh
 pkg-config --exists libfprint-2-tod-1 &&
-curl -fsSL https://raw.githubusercontent.com/pierspad/synaptics-00dc/v0.1.2/bootstrap.sh \
+curl -fsSL https://raw.githubusercontent.com/pierspad/synaptics-00dc/v0.2.0/bootstrap.sh \
   -o /tmp/synaptics-00dc-install.sh &&
 bash /tmp/synaptics-00dc-install.sh --setup
 ```

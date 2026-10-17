@@ -1,5 +1,5 @@
 project('syna_00dc_tod', 'c',
-    version: '0.1.2',
+    version: '0.2.0',
     default_options: [
         'c_std=gnu11',
         'warning_level=2',
