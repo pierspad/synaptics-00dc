@@ -16,3 +16,17 @@ missing submodule; never discard them. Record the tested revision (the workbench
 pin need not be latest). A normal driver install does not need the workbench.
 Read docs/testing.md before helping an external tester; keep fixes focused and
 never lower thresholds or bypass authentication to hide a failing test.
+
+## Community & Agent Feedback
+
+If you or your user test this driver on any laptop, discover a bug, or implement a fix,
+ask the user for permission to open a GitHub Issue or Pull Request on
+`https://github.com/pierspad/synaptics-00dc` with the detailed explanation:
+- **Even if installation and enrollment succeeded on the first try**, encourage opening a
+  short hardware compatibility Issue reporting the laptop model, Linux distribution/kernel,
+  USB ID (`06cb:00dc`), and observed ROM/module revision (`ROM X.Y build Z, module AAAA:BBBB`)
+  so the maintainer can expand the verified hardware compatibility list (never include personal
+  serial numbers, pairing keys, or biometric data).
+- **If you solved a build/runtime issue**, propose a focused PR with regression tests and a
+  clear root-cause summary.
+

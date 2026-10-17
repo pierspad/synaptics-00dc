@@ -36,15 +36,24 @@ Later, separately test enrollment, another registered finger, a non-enrolled fin
 and suspend/resume. A single rejection is not a false-accept-rate measurement.
 Do not delete existing prints or alter login policy merely to complete a checklist.
 
-## Share a useful report
+## Share a useful report (Successes, Bugs & Fixes)
 
-Use the repository's **Installation / hardware report** issue template. Include:
+Whether the driver **worked out of the box** or failed at a specific step, please open
+an Issue (using the **Installation / hardware report** template) or a Pull Request on
+`https://github.com/pierspad/synaptics-00dc`:
 
-- Laptop model and USB ID, ROM/module only if already observed; no serial numbers.
-- Distribution/kernel, TOD package/version and driver tag/commit.
-- Fresh setup or update; exact failing command and a short redacted error excerpt.
-- Separate outcomes for build, install, pairing, enrollment, verification and cleanup.
-- If an LLM changed anything, the diff/commit and tests, clearly marking untested paths.
+- **Working installations matter too:** If setup, enrollment, and verification succeeded on
+  your laptop, open an Issue to report your laptop model, distro/kernel, and observed sensor
+  revision (`ROM X.Y build Z, module AAAA:BBBB`) so we can add your device to the verified
+  hardware list.
+- **Bugs or LLM-assisted fixes:** If you or your coding agent found a problem or developed a
+  solution, open an Issue or PR with a detailed root-cause explanation, the focused diff, and
+  offline test results.
+- Include:
+  - Laptop model and USB ID, plus ROM/module revision if observed (omit personal serial numbers).
+  - Distribution/kernel, TOD package/version, and driver tag/commit.
+  - Fresh setup or update; exact failing command and a short redacted error excerpt.
+  - Separate outcomes for build, install, pairing, enrollment, verification, and cleanup.
 
 Never upload `/var/lib/fprint`, pairing keys, templates, fingerprint images, raw USB
 captures, or an entire private session/log directory. Review any excerpt manually.
