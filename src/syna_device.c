@@ -1035,9 +1035,101 @@ on_enroll_completed (GObject *source_object, GAsyncResult *res, gpointer user_da
     fpi_device_enroll_complete (device, encoded ? g_object_ref (print) : NULL, error);
 }
 
+typedef struct {
+    FpPrint *print;
+    GPtrArray *samples;
+    guint stage;
+    gboolean require_lift;
+} SynaEnrollSsmCtx;
+
+static void
+syna_enroll_ssm_ctx_free (SynaEnrollSsmCtx *ctx)
+{
+    if (!ctx) return;
+    if (ctx->print) g_object_unref (ctx->print);
+    if (ctx->samples) g_ptr_array_unref (ctx->samples);
+    g_free (ctx);
+}
+
+static void syna_enroll_ssm_capture_cb (FpiDeviceSyna00dc *self,
+                                        float *filtered_sample,
+                                        gpointer user_data,
+                                        GError *error);
+
+static void
+syna_enroll_ssm_capture_cb (FpiDeviceSyna00dc *self,
+                            float *filtered_sample,
+                            gpointer user_data,
+                            GError *error)
+{
+    FpDevice *device = FP_DEVICE (self);
+    SynaEnrollSsmCtx *ctx = user_data;
+
+    if (error) {
+        if (error->domain == FP_DEVICE_RETRY) {
+            fpi_device_enroll_progress (device, ctx->stage, NULL, error);
+            ctx->require_lift = TRUE;
+            if (!g_cancellable_is_cancelled (fpi_device_get_cancellable (device))) {
+                FpiSsm *ssm = syna_ssm_capture_new (self, ctx->require_lift,
+                                                    (ctx->stage + 1 < SYNA_ENROLL_STAGES),
+                                                    syna_enroll_ssm_capture_cb, ctx);
+                fpi_ssm_start (ssm, NULL);
+            } else {
+                syna_enroll_ssm_ctx_free (ctx);
+                fpi_device_enroll_complete (device, NULL,
+                                            g_error_new_literal (G_IO_ERROR, G_IO_ERROR_CANCELLED,
+                                                                 "Enrollment cancelled"));
+            }
+        } else {
+            syna_enroll_ssm_ctx_free (ctx);
+            fpi_device_enroll_complete (device, NULL, error);
+        }
+        return;
+    }
+
+    if (filtered_sample) {
+        g_ptr_array_add (ctx->samples, filtered_sample);
+        ctx->stage++;
+        ctx->require_lift = TRUE;
+        fpi_device_enroll_progress (device, ctx->stage, NULL, NULL);
+
+        if (ctx->stage < SYNA_ENROLL_STAGES) {
+            FpiSsm *ssm = syna_ssm_capture_new (self, ctx->require_lift,
+                                                (ctx->stage + 1 < SYNA_ENROLL_STAGES),
+                                                syna_enroll_ssm_capture_cb, ctx);
+            fpi_ssm_start (ssm, NULL);
+        } else {
+            GVariant *encoded = g_variant_ref_sink (syna_template_encode (ctx->samples));
+            fpi_print_set_type (ctx->print, FPI_PRINT_RAW);
+            g_object_set (ctx->print, "fpi-data", encoded, NULL);
+            g_variant_unref (encoded);
+            fpi_device_enroll_complete (device, g_object_ref (ctx->print), NULL);
+            syna_enroll_ssm_ctx_free (ctx);
+        }
+    }
+}
+
 static void
 syna_enroll (FpDevice *device)
 {
+    if (syna_use_async_ssm ()) {
+        FpiDeviceSyna00dc *self = FPI_DEVICE_SYNA_00DC (device);
+        FpPrint *print = NULL;
+        fpi_device_get_enroll_data (device, &print);
+
+        SynaEnrollSsmCtx *ctx = g_new0 (SynaEnrollSsmCtx, 1);
+        ctx->print = print ? g_object_ref (print) : NULL;
+        ctx->samples = g_ptr_array_new_with_free_func (g_free);
+        ctx->stage = 0;
+        ctx->require_lift = FALSE;
+
+        FpiSsm *ssm = syna_ssm_capture_new (self, ctx->require_lift,
+                                            (ctx->stage + 1 < SYNA_ENROLL_STAGES),
+                                            syna_enroll_ssm_capture_cb, ctx);
+        fpi_ssm_start (ssm, NULL);
+        return;
+    }
+
     GTask *task = g_task_new (device, fpi_device_get_cancellable (device),
                               on_enroll_completed, NULL);
     FpPrint *print = NULL;
@@ -1174,10 +1266,51 @@ on_verify_completed (GObject *source_object, GAsyncResult *res, gpointer user_da
 }
 
 static void
+syna_verify_ssm_capture_cb (FpiDeviceSyna00dc *self,
+                            float *filtered_sample,
+                            gpointer user_data,
+                            GError *error)
+{
+    FpDevice *device = FP_DEVICE (self);
+    GPtrArray *entries = user_data;
+
+    if (error) {
+        if (error->domain == FP_DEVICE_RETRY) {
+            fpi_device_verify_report (device, FPI_MATCH_ERROR, NULL, error);
+            fpi_device_verify_complete (device, NULL);
+        } else {
+            fpi_device_verify_complete (device, error);
+        }
+        if (entries) g_ptr_array_unref (entries);
+        return;
+    }
+
+    SynaMatchResult match_res;
+    FpPrint *best_print = NULL;
+    int rc = syna_match_probe_against_gallery (filtered_sample, entries, &best_print, &match_res);
+    g_free (filtered_sample);
+
+    if (rc != 0) {
+        if (entries) g_ptr_array_unref (entries);
+        fpi_device_verify_complete (device, g_error_new_literal (G_IO_ERROR, G_IO_ERROR_FAILED, "Matcher failed"));
+        return;
+    }
+
+    g_message ("Synaptics verify score: %.3f (threshold: %.2f, rotation: %.1f deg, overlap: %.1f%%)",
+               match_res.score, (float)SYNA_MATCH_THRESHOLD, match_res.angle, match_res.overlap * 100.0f);
+
+    FpPrint *print = NULL;
+    fpi_device_get_verify_data (device, &print);
+    gboolean matched = match_res.score >= SYNA_MATCH_THRESHOLD;
+    fpi_device_verify_report (device, matched ? FPI_MATCH_SUCCESS : FPI_MATCH_FAIL,
+                              matched ? print : NULL, NULL);
+    if (entries) g_ptr_array_unref (entries);
+    fpi_device_verify_complete (device, NULL);
+}
+
+static void
 syna_verify (FpDevice *device)
 {
-    GTask *task = g_task_new (device, fpi_device_get_cancellable (device),
-                              on_verify_completed, NULL);
     FpPrint *print = NULL;
     GVariant *data = NULL;
     fpi_device_get_verify_data (device, &print);
@@ -1194,6 +1327,23 @@ syna_verify (FpDevice *device)
         entry->samples = samples;
         g_ptr_array_add (entries, entry);
     }
+
+    if (syna_use_async_ssm ()) {
+        if (!entries || entries->len == 0) {
+            if (entries) g_ptr_array_unref (entries);
+            fpi_device_verify_complete (device, g_error_new_literal (G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                                                                     "Invalid or unsupported enrolled template; enroll again"));
+            return;
+        }
+        FpiDeviceSyna00dc *self = FPI_DEVICE_SYNA_00DC (device);
+        FpiSsm *ssm = syna_ssm_capture_new (self, FALSE, FALSE,
+                                            syna_verify_ssm_capture_cb, entries);
+        fpi_ssm_start (ssm, NULL);
+        return;
+    }
+
+    GTask *task = g_task_new (device, fpi_device_get_cancellable (device),
+                              on_verify_completed, NULL);
     g_task_set_task_data (task, entries, (GDestroyNotify)g_ptr_array_unref);
     g_task_run_in_thread (task, syna_verify_thread);
     g_object_unref (task);
@@ -1207,8 +1357,7 @@ syna_identify_thread (GTask *task, gpointer source_object, gpointer task_data, G
     GError *error = NULL;
 
     if (!entries || entries->len == 0) {
-        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
-                                 "No valid enrolled templates available for identification");
+        g_task_return_pointer (task, NULL, NULL);
         return;
     }
 
@@ -1250,10 +1399,42 @@ on_identify_completed (GObject *source_object, GAsyncResult *res, gpointer user_
 }
 
 static void
+syna_identify_ssm_capture_cb (FpiDeviceSyna00dc *self,
+                              float *filtered_sample,
+                              gpointer user_data,
+                              GError *error)
+{
+    FpDevice *device = FP_DEVICE (self);
+    GPtrArray *entries = user_data;
+
+    if (error) {
+        if (error->domain == FP_DEVICE_RETRY) {
+            fpi_device_identify_report (device, NULL, NULL, error);
+            fpi_device_identify_complete (device, NULL);
+        } else {
+            fpi_device_identify_complete (device, error);
+        }
+        if (entries) g_ptr_array_unref (entries);
+        return;
+    }
+
+    SynaMatchResult best_res;
+    FpPrint *best_print = NULL;
+    syna_match_probe_against_gallery (filtered_sample, entries, &best_print, &best_res);
+    g_free (filtered_sample);
+
+    g_message ("Synaptics identify best score: %.3f (threshold: %.2f, rotation: %.1f deg, overlap: %.1f%%)",
+               best_res.score, (float)SYNA_MATCH_THRESHOLD, best_res.angle, best_res.overlap * 100.0f);
+
+    FpPrint *matched = (best_print && best_res.score >= SYNA_MATCH_THRESHOLD) ? best_print : NULL;
+    fpi_device_identify_report (device, matched, matched, NULL);
+    if (entries) g_ptr_array_unref (entries);
+    fpi_device_identify_complete (device, NULL);
+}
+
+static void
 syna_identify (FpDevice *device)
 {
-    GTask *task = g_task_new (device, fpi_device_get_cancellable (device),
-                              on_identify_completed, NULL);
     GPtrArray *prints = NULL;
     fpi_device_get_identify_data (device, &prints);
 
@@ -1274,6 +1455,22 @@ syna_identify (FpDevice *device)
         }
     }
 
+    if (syna_use_async_ssm ()) {
+        if (!entries || entries->len == 0) {
+            if (entries) g_ptr_array_unref (entries);
+            fpi_device_identify_report (device, NULL, NULL, NULL);
+            fpi_device_identify_complete (device, NULL);
+            return;
+        }
+        FpiDeviceSyna00dc *self = FPI_DEVICE_SYNA_00DC (device);
+        FpiSsm *ssm = syna_ssm_capture_new (self, FALSE, FALSE,
+                                            syna_identify_ssm_capture_cb, entries);
+        fpi_ssm_start (ssm, NULL);
+        return;
+    }
+
+    GTask *task = g_task_new (device, fpi_device_get_cancellable (device),
+                              on_identify_completed, NULL);
     g_task_set_task_data (task, entries, (GDestroyNotify)g_ptr_array_unref);
     g_task_run_in_thread (task, syna_identify_thread);
     g_object_unref (task);
@@ -1311,4 +1508,5 @@ fpi_device_syna_00dc_class_init (FpiDeviceSyna00dcClass *klass)
     dev_class->cancel = syna_cancel;
 
     fpi_device_class_auto_initialize_features (dev_class);
+    dev_class->features |= FP_DEVICE_FEATURE_DUPLICATES_CHECK;
 }
