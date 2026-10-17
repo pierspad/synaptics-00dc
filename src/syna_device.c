@@ -496,13 +496,18 @@ syna_open_thread (GTask *task, gpointer source_object, gpointer task_data, GCanc
       return;
     }
 
-  /* Reset USB interface to ensure clean state */
-  g_usb_device_reset (self->usb_device, NULL);
+  self->had_capture_in_session = FALSE;
 
   if (!g_usb_device_claim_interface (self->usb_device, 0, G_USB_DEVICE_CLAIM_INTERFACE_NONE, &error))
     {
-      g_task_return_error (task, error);
-      return;
+      /* Fallback: reset USB device once if claiming fails */
+      g_clear_error (&error);
+      g_usb_device_reset (self->usb_device, NULL);
+      if (!g_usb_device_claim_interface (self->usb_device, 0, G_USB_DEVICE_CLAIM_INTERFACE_NONE, &error))
+        {
+          g_task_return_error (task, error);
+          return;
+        }
     }
   claimed = TRUE;
 
@@ -512,7 +517,18 @@ syna_open_thread (GTask *task, gpointer source_object, gpointer task_data, GCanc
     uint8_t ver_resp[64];
     size_t ver_resp_len = 0;
     if (!syna_usb_cmd (self->usb_device, &ver_cmd, 1, ver_resp, sizeof (ver_resp), &ver_resp_len, cancellable, &error))
-      goto fail;
+      {
+        /* If the sensor FIFO had stale state from an interrupted session, reset once and retry */
+        g_clear_error (&error);
+        g_usb_device_release_interface (self->usb_device, 0, G_USB_DEVICE_CLAIM_INTERFACE_NONE, NULL);
+        claimed = FALSE;
+        g_usb_device_reset (self->usb_device, NULL);
+        if (!g_usb_device_claim_interface (self->usb_device, 0, G_USB_DEVICE_CLAIM_INTERFACE_NONE, &error))
+          goto fail;
+        claimed = TRUE;
+        if (!syna_usb_cmd (self->usb_device, &ver_cmd, 1, ver_resp, sizeof (ver_resp), &ver_resp_len, cancellable, &error))
+          goto fail;
+      }
     SynaVersionInfo ver_info;
     if (syna_parse_version_response (ver_resp, ver_resp_len, &ver_info) != 0)
       {
@@ -698,7 +714,10 @@ syna_open_ssm_done_cb (FpiSsm *ssm, FpDevice *device, GError *error)
   (void) ssm;
   FpiDeviceSyna00dc *self = FPI_DEVICE_SYNA_00DC (device);
   if (!error)
-    self->is_open = TRUE;
+    {
+      self->is_open = TRUE;
+      self->had_capture_in_session = FALSE;
+    }
   fpi_device_open_complete (device, error);
 }
 
@@ -708,6 +727,7 @@ syna_open (FpDevice *device)
   if (syna_use_async_ssm ())
     {
       FpiDeviceSyna00dc *self = FPI_DEVICE_SYNA_00DC (device);
+      self->had_capture_in_session = FALSE;
       if (!self->has_cached_baseline)
         self->has_cached_baseline = syna_load_baseline_cache (NULL, self->cached_baseline);
       if (self->has_cached_baseline)
@@ -739,17 +759,40 @@ syna_close_thread (GTask *task, gpointer source_object, gpointer task_data, GCan
 
   if (self->is_open && self->usb_device)
     {
-      /* Send TLS close_notify */
-      uint8_t close_buf[128];
-      size_t close_len = 0;
-      if (syna_tls_build_close_notify (&self->tls, close_buf, &close_len) == 0)
+      if (self->tls.finished_verified)
         {
-          gsize transferred = 0;
-          g_usb_device_bulk_transfer (self->usb_device, SYNA_EP_CMD_OUT, close_buf, close_len, &transferred, 1000, NULL, NULL);
+          /* 1. Send 0x1a cleanup and read response */
+          uint8_t clean_cmd = SYNA_CMD_CLEANUP;
+          uint8_t clean_enc[128];
+          size_t clean_enc_len = 0;
+          if (syna_tls_encrypt_app_data (&self->tls, &clean_cmd, 1, clean_enc, &clean_enc_len) == 0)
+            {
+              gsize transferred = 0;
+              uint8_t rx_buf[256];
+              if (g_usb_device_bulk_transfer (self->usb_device, SYNA_EP_CMD_OUT,
+                                              clean_enc, clean_enc_len, &transferred, 500, NULL, NULL))
+                g_usb_device_bulk_transfer (self->usb_device, SYNA_EP_CMD_IN,
+                                            rx_buf, sizeof (rx_buf), &transferred, 500, NULL, NULL);
+            }
+
+          /* 2. Send TLS close_notify and read sensor alert reply so EP_CMD_IN FIFO is clean */
+          uint8_t close_buf[128];
+          size_t close_len = 0;
+          if (syna_tls_build_close_notify (&self->tls, close_buf, &close_len) == 0)
+            {
+              gsize transferred = 0;
+              uint8_t rx_buf[256];
+              if (g_usb_device_bulk_transfer (self->usb_device, SYNA_EP_CMD_OUT,
+                                              close_buf, close_len, &transferred, 500, NULL, NULL))
+                g_usb_device_bulk_transfer (self->usb_device, SYNA_EP_CMD_IN,
+                                            rx_buf, sizeof (rx_buf), &transferred, 500, NULL, NULL);
+            }
         }
 
       g_usb_device_release_interface (self->usb_device, 0, G_USB_DEVICE_CLAIM_INTERFACE_NONE, NULL);
       self->is_open = FALSE;
+      self->capture_pipeline_ready = FALSE;
+      self->had_capture_in_session = FALSE;
     }
 
   syna_tls_free (&self->tls);
@@ -810,12 +853,21 @@ syna_read_full_frame (GUsbDevice *usb_device, uint8_t *frame_buf, gint64 deadlin
           g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT, "Frame deadline exceeded");
           return FALSE;
         }
+      /* Cap individual bulk read timeout to 300ms so cancellation is checked promptly */
+      guint chunk_timeout_ms = MIN (timeout_ms, 300);
       gsize chunk = 0;
       GError *local_err = NULL;
       if (!g_usb_device_bulk_transfer (usb_device, SYNA_EP_DATA_IN,
                                        frame_buf + total, SYNA_FRAME_BYTES - total,
-                                       &chunk, timeout_ms, cancellable, &local_err))
+                                       &chunk, chunk_timeout_ms, cancellable, &local_err))
         {
+          if (g_error_matches (local_err, G_USB_DEVICE_ERROR, G_USB_DEVICE_ERROR_TIMED_OUT) &&
+              !g_cancellable_is_cancelled (cancellable) &&
+              g_get_monotonic_time () < deadline)
+            {
+              g_clear_error (&local_err);
+              continue;
+            }
           if (local_err)
             g_propagate_error (error, local_err);
           return FALSE;
@@ -1009,6 +1061,7 @@ syna_capture_finger_sample (FpiDeviceSyna00dc *self,
     }
 
   self->capture_pipeline_ready = FALSE;
+  self->had_capture_in_session = TRUE;
 
   if ((error && *error) || valid_contact_frames < min_contact_frames)
     {
@@ -1064,7 +1117,9 @@ syna_enroll_thread (GTask *task, gpointer source_object, gpointer task_data, GCa
   FpPrint *print = FP_PRINT (task_data);
 
   guint stage = 0;
-  gboolean require_lift = FALSE;
+  /* If fprintd ran a pre-enroll duplicate-check identify scan in this same open session,
+   * the user's finger is still on the sensor from Touch #1; wait for them to lift first! */
+  gboolean require_lift = self->had_capture_in_session;
   while (stage < SYNA_ENROLL_STAGES)
     {
       if (g_cancellable_is_cancelled (cancellable))
@@ -1225,7 +1280,7 @@ syna_enroll (FpDevice *device)
       ctx->print = print ? g_object_ref (print) : NULL;
       ctx->samples = g_ptr_array_new_with_free_func (g_free);
       ctx->stage = 0;
-      ctx->require_lift = FALSE;
+      ctx->require_lift = self->had_capture_in_session;
 
       FpiSsm *ssm = syna_ssm_capture_new (self, ctx->require_lift,
                                           (ctx->stage + 1 < SYNA_ENROLL_STAGES),

@@ -98,6 +98,7 @@ typedef struct
   size_t             rx_len;
   gboolean           interface_claimed;
   gboolean           open_succeeded;
+  gboolean           reset_retried;
 } SynaOpenSsmData;
 
 static void
@@ -127,10 +128,25 @@ syna_ssm_bulk_tx (FpiSsm *ssm, FpDevice *dev, const uint8_t *buf, size_t len, gu
 static void
 syna_ssm_bulk_rx_cb (FpiUsbTransfer *transfer, FpDevice *device, gpointer user_data, GError *error)
 {
-  (void) device;
   SynaOpenSsmData *ctx = user_data;
   if (error)
     {
+      if (fpi_ssm_get_cur_state (transfer->ssm) == SYNA_OPEN_GET_VERSION_RX &&
+          !ctx->reset_retried &&
+          !g_cancellable_is_cancelled (fpi_device_get_cancellable (device)))
+        {
+          g_clear_error (&error);
+          ctx->reset_retried = TRUE;
+          if (ctx->interface_claimed && ctx->self && ctx->self->usb_device)
+            {
+              g_usb_device_release_interface (ctx->self->usb_device, 0, G_USB_DEVICE_CLAIM_INTERFACE_NONE, NULL);
+              ctx->interface_claimed = FALSE;
+            }
+          if (ctx->self && ctx->self->usb_device)
+            g_usb_device_reset (ctx->self->usb_device, NULL);
+          fpi_ssm_jump_to_state (transfer->ssm, SYNA_OPEN_RESET_AND_CLAIM);
+          return;
+        }
       fpi_ssm_mark_failed (transfer->ssm, error);
       return;
     }
@@ -172,11 +188,15 @@ syna_open_ssm_handler (FpiSsm *ssm, FpDevice *dev)
           fpi_ssm_mark_failed (ssm, fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL, "No GUsbDevice attached"));
           return;
         }
-      g_usb_device_reset (self->usb_device, NULL);
       if (!g_usb_device_claim_interface (self->usb_device, 0, G_USB_DEVICE_CLAIM_INTERFACE_NONE, &error))
         {
-          fpi_ssm_mark_failed (ssm, error);
-          return;
+          g_clear_error (&error);
+          g_usb_device_reset (self->usb_device, NULL);
+          if (!g_usb_device_claim_interface (self->usb_device, 0, G_USB_DEVICE_CLAIM_INTERFACE_NONE, &error))
+            {
+              fpi_ssm_mark_failed (ssm, error);
+              return;
+            }
         }
       ctx->interface_claimed = TRUE;
       fpi_ssm_next_state (ssm);
@@ -189,7 +209,7 @@ syna_open_ssm_handler (FpiSsm *ssm, FpDevice *dev)
       }
 
     case SYNA_OPEN_GET_VERSION_RX:
-      syna_ssm_bulk_rx (ssm, dev, ctx, 64, 5000);
+      syna_ssm_bulk_rx (ssm, dev, ctx, 64, 1500);
       break;
 
     case SYNA_OPEN_GET_SENSOR_ID_TX: {
@@ -918,6 +938,7 @@ syna_capture_ssm_handler (FpiSsm *ssm, FpDevice *dev)
 
     case SYNA_CAP_FINISH: {
         self->capture_pipeline_ready = FALSE;
+        self->had_capture_in_session = TRUE;
         if (ctx->capture_error)
           {
             GError *err = g_steal_pointer (&ctx->capture_error);
@@ -1119,6 +1140,7 @@ syna_close_ssm_handler (FpiSsm *ssm, FpDevice *dev)
             g_usb_device_release_interface (self->usb_device, 0, 0, NULL);
           self->is_open = FALSE;
           self->capture_pipeline_ready = FALSE;
+          self->had_capture_in_session = FALSE;
         }
       fpi_ssm_mark_completed (ssm);
       break;

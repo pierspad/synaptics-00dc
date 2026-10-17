@@ -27,6 +27,7 @@ struct _FpiDeviceSyna00dc
   gboolean       is_open;
   gboolean       is_cancelling;
   gboolean       capture_pipeline_ready;
+  gboolean       had_capture_in_session;
 
   /* Calibrated empty sensor baseline (56x144 floats) */
   float   *baseline;
