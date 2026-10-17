@@ -4,11 +4,6 @@
 #include <fpi-ssm.h>
 #include <fpi-usb-transfer.h>
 
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /**
  * Create a non-blocking libfprint sequential state machine (FpiSsm) for device open,
  * hardware identity verification (0x01/0x75), optional first-boot pairing (0x4f/0x50),
@@ -35,26 +30,26 @@ typedef void (*SynaCaptureCompletedCallback) (FpiDeviceSyna00dc *self,
  *   - 6-frame +/-2px alignment, averaging, and spatial bandpass filtering
  */
 FpiSsm *syna_ssm_capture_new (FpiDeviceSyna00dc           *self,
-                              gboolean                      require_finger_lift,
-                              gboolean                      more_stages_needed,
-                              SynaCaptureCompletedCallback  cb,
-                              gpointer                      user_data);
+                              gboolean                     require_finger_lift,
+                              gboolean                     more_stages_needed,
+                              SynaCaptureCompletedCallback cb,
+                              gpointer                     user_data);
 
 typedef enum {
-    SYNA_CLOSE_STEP_CLEANUP_TX = 0,
-    SYNA_CLOSE_STEP_CLEANUP_RX,
-    SYNA_CLOSE_STEP_TLS_ALERT_TX,
-    SYNA_CLOSE_STEP_TLS_ALERT_RX,
-    SYNA_CLOSE_STEP_RELEASE_USB,
-    SYNA_CLOSE_NUM_STATES,
+  SYNA_CLOSE_STEP_CLEANUP_TX = 0,
+  SYNA_CLOSE_STEP_CLEANUP_RX,
+  SYNA_CLOSE_STEP_TLS_ALERT_TX,
+  SYNA_CLOSE_STEP_TLS_ALERT_RX,
+  SYNA_CLOSE_STEP_RELEASE_USB,
+  SYNA_CLOSE_NUM_STATES,
 } SynaCloseStep;
 
-typedef void (*SynaSsmUsbRunner) (FpiSsm *ssm, FpDevice *dev, gpointer user_data);
+typedef void (*SynaSsmUsbRunner) (FpiSsm   *ssm,
+                                  FpDevice *dev,
+                                  gpointer  user_data);
 
-FpiSsm *syna_ssm_close_new (FpDevice *dev, SynaSsmUsbRunner runner, gpointer user_data);
+FpiSsm *syna_ssm_close_new (FpDevice        *dev,
+                            SynaSsmUsbRunner runner,
+                            gpointer         user_data);
 
 gboolean syna_ssm_close_cancellable_valid (GCancellable *cancellable);
-
-#ifdef __cplusplus
-}
-#endif

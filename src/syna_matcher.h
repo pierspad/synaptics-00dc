@@ -4,16 +4,13 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-typedef struct {
-    float score;      /* Best normalized correlation score (-1.0 .. 1.0) */
-    float angle;      /* Rotation angle in degrees (-30.0 .. 30.0) */
-    int dy;           /* Translation dy in pixels */
-    int dx;           /* Translation dx in pixels */
-    float overlap;    /* Overlap fraction (0.0 .. 1.0) */
+typedef struct
+{
+  float score;        /* Best normalized correlation score (-1.0 .. 1.0) */
+  float angle;        /* Rotation angle in degrees (-30.0 .. 30.0) */
+  int   dy;           /* Translation dy in pixels */
+  int   dx;           /* Translation dx in pixels */
+  float overlap;      /* Overlap fraction (0.0 .. 1.0) */
 } SynaMatchResult;
 
 /**
@@ -23,7 +20,8 @@ typedef struct {
  * @param out Output buffer of 56x144 floats, zero-mean and unit variance.
  * @return 0 on success, negative error code on failure.
  */
-int syna_bandpass_filter(const float *in, float *out);
+int syna_bandpass_filter (const float *in,
+                          float       *out);
 
 /**
  * Compare two bandpassed 56x144 images using rotation grid and normalized cross-correlation.
@@ -36,10 +34,10 @@ int syna_bandpass_filter(const float *in, float *out);
  * @param result Output struct receiving best score, angle, dy, dx, overlap.
  * @return 0 on success, negative error code on failure.
  */
-int syna_match_images(const float *a,
-                      const float *b,
-                      float min_overlap,
-                      SynaMatchResult *result);
+int syna_match_images (const float     *a,
+                       const float     *b,
+                       float            min_overlap,
+                       SynaMatchResult *result);
 
 /**
  * Context for high-performance matching with pre-allocated scratch buffers
@@ -48,8 +46,8 @@ int syna_match_images(const float *a,
  */
 typedef struct SynaMatcherContext SynaMatcherContext;
 
-SynaMatcherContext *syna_matcher_context_new(void);
-void syna_matcher_context_free(SynaMatcherContext *ctx);
+SynaMatcherContext *syna_matcher_context_new (void);
+void syna_matcher_context_free (SynaMatcherContext *ctx);
 
 /**
  * Precompute FFT and Summed-Area Tables for probe image.
@@ -57,7 +55,8 @@ void syna_matcher_context_free(SynaMatcherContext *ctx);
  * @param ctx Matcher context.
  * @param probe Bandpassed 56x144 probe image (unit variance).
  */
-void syna_matcher_set_probe(SynaMatcherContext *ctx, const float *probe);
+void syna_matcher_set_probe (SynaMatcherContext *ctx,
+                             const float        *probe);
 
 /**
  * Match an enrolled template against the currently set probe image.
@@ -68,10 +67,10 @@ void syna_matcher_set_probe(SynaMatcherContext *ctx, const float *probe);
  * @param result Output match result.
  * @return 0 on success, negative error code on failure.
  */
-int syna_matcher_match_template(SynaMatcherContext *ctx,
-                                const float *template_b,
-                                float min_overlap,
-                                SynaMatchResult *result);
+int syna_matcher_match_template (SynaMatcherContext *ctx,
+                                 const float        *template_b,
+                                 float               min_overlap,
+                                 SynaMatchResult    *result);
 
 /**
  * Convenience helper to determine if two 56x144 images match the authorized threshold.
@@ -80,8 +79,5 @@ int syna_matcher_match_template(SynaMatcherContext *ctx,
  * @param b Second 56x144 image.
  * @return true if score >= SYNA_MATCH_THRESHOLD (0.50f), false otherwise.
  */
-bool syna_is_match(const float *a, const float *b);
-
-#ifdef __cplusplus
-}
-#endif
+bool syna_is_match (const float *a,
+                    const float *b);

@@ -4,22 +4,19 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #define SYNA_DEFAULT_DATA_DIR "/var/lib/fprint/syna_00dc"
 
-typedef struct {
-    char *host_key_pem;
-    uint8_t *host_cert;
-    size_t host_cert_len;
-    uint8_t *server_ecdh_pub;
-    size_t server_ecdh_pub_len;
-    uint8_t *capture_init_blob;
-    size_t capture_init_blob_len;
-    uint8_t *capture_packet;
-    size_t capture_packet_len;
+typedef struct
+{
+  char    *host_key_pem;
+  uint8_t *host_cert;
+  size_t   host_cert_len;
+  uint8_t *server_ecdh_pub;
+  size_t   server_ecdh_pub_len;
+  uint8_t *capture_init_blob;
+  size_t   capture_init_blob_len;
+  uint8_t *capture_packet;
+  size_t   capture_packet_len;
 } SynaOemData;
 
 /**
@@ -33,28 +30,27 @@ typedef struct {
  * @param oem Output struct receiving allocated buffers.
  * @return 0 on success, negative error code if files are missing or unreadable.
  */
-int syna_oem_load(const char *data_dir, SynaOemData *oem);
+int syna_oem_load (const char  *data_dir,
+                   SynaOemData *oem);
 
 /**
  * Return true only when all pairing credential paths are absent.
  * A present, symlinked, or inaccessible path disables automatic pairing.
  */
-bool syna_oem_pairing_allowed(const char *data_dir);
+bool syna_oem_pairing_allowed (const char *data_dir);
 
 /**
  * Atomically persist newly paired credentials (host_key.pem, host_cert.bin, server_ecdh_pub.bin)
  * to data_dir (or SYNA_DEFAULT_DATA_DIR if NULL) with 0700 dir / 0600 file permissions.
  */
-int syna_oem_save_credentials(const char *data_dir,
-                              const char *host_key_pem,
-                              const uint8_t *host_cert, size_t host_cert_len,
-                              const uint8_t *server_ecdh_pub, size_t server_ecdh_pub_len);
+int syna_oem_save_credentials (const char    *data_dir,
+                               const char    *host_key_pem,
+                               const uint8_t *host_cert,
+                               size_t         host_cert_len,
+                               const uint8_t *server_ecdh_pub,
+                               size_t         server_ecdh_pub_len);
 
 /**
  * Free memory in SynaOemData.
  */
-void syna_oem_free(SynaOemData *oem);
-
-#ifdef __cplusplus
-}
-#endif
+void syna_oem_free (SynaOemData *oem);

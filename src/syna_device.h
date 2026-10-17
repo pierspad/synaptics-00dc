@@ -8,10 +8,6 @@
 #include "syna_oem.h"
 #include "syna_proto.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #define FPI_TYPE_DEVICE_SYNA_00DC (fpi_device_syna_00dc_get_type ())
 G_DECLARE_FINAL_TYPE (FpiDeviceSyna00dc, fpi_device_syna_00dc, FPI, DEVICE_SYNA_00DC, FpDevice)
 
@@ -21,30 +17,26 @@ typedef struct _FpiDeviceSyna00dc FpiDeviceSynaTod;
 
 struct _FpiDeviceSyna00dc
 {
-    FpDevice parent;
+  FpDevice       parent;
 
-    GUsbDevice *usb_device;
-    GMainContext *main_context;
-    SynaOemData oem;
-    SynaTlsContext tls;
+  GUsbDevice    *usb_device;
+  GMainContext  *main_context;
+  SynaOemData    oem;
+  SynaTlsContext tls;
 
-    gboolean is_open;
-    gboolean is_cancelling;
-    gboolean capture_pipeline_ready;
+  gboolean       is_open;
+  gboolean       is_cancelling;
+  gboolean       capture_pipeline_ready;
 
-    /* Calibrated empty sensor baseline (56x144 floats) */
-    float *baseline;
-    gboolean has_baseline;
-    gboolean initial_contact_present;
+  /* Calibrated empty sensor baseline (56x144 floats) */
+  float   *baseline;
+  gboolean has_baseline;
+  gboolean initial_contact_present;
 
-    /* Per-device cached empty sensor baseline */
-    float cached_baseline[SYNA_IMG_WIDTH * SYNA_IMG_HEIGHT];
-    gboolean has_cached_baseline;
+  /* Per-device cached empty sensor baseline */
+  float    cached_baseline[SYNA_IMG_WIDTH * SYNA_IMG_HEIGHT];
+  gboolean has_cached_baseline;
 
-    /* Enrolled templates stored locally */
-    GPtrArray *enrolled_templates;
+  /* Enrolled templates stored locally */
+  GPtrArray *enrolled_templates;
 };
-
-#ifdef __cplusplus
-}
-#endif

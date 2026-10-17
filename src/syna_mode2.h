@@ -4,10 +4,6 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /**
  * Decode a 16-byte aligned row buffer using the mode 2 Kronecker transform.
  *
@@ -17,10 +13,10 @@ extern "C" {
  * @param len Length in bytes (must be multiple of 16).
  * @return 0 on success, negative error code on failure.
  */
-int syna_decode_mode2_row(const uint8_t *encoded,
-                          const uint8_t *baseline,
-                          uint8_t *out,
-                          size_t len);
+int syna_decode_mode2_row (const uint8_t *encoded,
+                           const uint8_t *baseline,
+                           uint8_t       *out,
+                           size_t         len);
 
 /**
  * Validate a raw frame of SYNA_FRAME_BYTES (17024 bytes).
@@ -31,7 +27,8 @@ int syna_decode_mode2_row(const uint8_t *encoded,
  * @param counter_out If non-NULL, receives the frame counter (0..255).
  * @return 0 on success, negative error code if invalid.
  */
-int syna_validate_frame(const uint8_t *frame, uint8_t *counter_out);
+int syna_validate_frame (const uint8_t *frame,
+                         uint8_t       *counter_out);
 
 /**
  * Decode an entire validated raw frame of 112x152 bytes into a 56x144 image.
@@ -44,13 +41,9 @@ int syna_validate_frame(const uint8_t *frame, uint8_t *counter_out);
  * @param out Output buffer for 56x144 pixels (8064 bytes).
  * @return 0 on success, negative error code on failure.
  */
-int syna_decode_frame_mode2(const uint8_t *frame,
-                            const uint8_t *baseline,
-                            uint8_t *out);
-
-#ifdef __cplusplus
-}
-#endif
-
+int syna_decode_frame_mode2 (const uint8_t *frame,
+                             const uint8_t *baseline,
+                             uint8_t       *out);
 /* Decode without saturation. Subtract a measured float baseline afterwards. */
-int syna_decode_frame_unclipped(const uint8_t *frame, float *out);
+int syna_decode_frame_unclipped (const uint8_t *frame,
+                                 float         *out);

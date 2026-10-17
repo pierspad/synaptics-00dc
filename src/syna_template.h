@@ -5,5 +5,5 @@
 #define SYNA_ENROLL_STAGES 8
 #define SYNA_MAX_TEMPLATE_SAMPLES 16
 /* Version 1: (uint32 version, array of arrays of doubles). Legacy: native float bytes. */
-GVariant *syna_template_encode(GPtrArray *samples);
-GPtrArray *syna_template_decode(GVariant *data);
+GVariant *syna_template_encode (GPtrArray *samples);
+GPtrArray *syna_template_decode (GVariant *data);
