@@ -148,6 +148,7 @@ static void
 syna_ssm_bulk_rx_cb (FpiUsbTransfer *transfer, FpDevice *device, gpointer user_data, GError *error)
 {
   SynaOpenSsmData *ctx = user_data;
+
   if (error)
     {
       if (fpi_ssm_get_cur_state (transfer->ssm) == SYNA_OPEN_GET_VERSION_RX &&
